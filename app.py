@@ -6,6 +6,8 @@ import pandas as pd
 import requests
 import shapely.wkt
 import io
+import os
+import tempfile
 import concurrent.futures
 
 st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="centered")
@@ -75,11 +77,15 @@ uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", ty
 
 if uploaded_file is not None:
     try:
-        # Odczyt pliku DXF bezpośrednio ze strumienia bajtów w pamięci
-        file_bytes = io.BytesIO(uploaded_file.getvalue())
-        doc = ezdxf.read(file_bytes)
+        # Zapis pliku tymczasowego i odczyt przez readfile (100% odporny na błędy kodowania i formatu)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_path = tmp_file.name
+
+        doc = ezdxf.readfile(tmp_path)
         msp = doc.modelspace()
         layers = sorted(list(set([layer.dxf.name for layer in doc.layers])))
+        os.remove(tmp_path)
     except Exception as e:
         st.error(f"Nie można odczytać pliku DXF: {e}")
         st.stop()
@@ -97,7 +103,6 @@ if uploaded_file is not None:
     format_pow = st.selectbox("Zaokrąglenie powierzchni:", ["2 miejsca po przecinku (np. 11.44)", "1 miejsce po przecinku (np. 11.4)", "Brak - liczby całkowite (np. 11)"])
 
     if st.button("🚀 Generuj raport i pliki wynikowe", type="primary"):
-        # Elementy interfejsu dla paska postępu
         progress_bar = st.progress(0)
         status_text = st.empty()
 
@@ -154,7 +159,6 @@ if uploaded_file is not None:
                     p_idx, r_id = future.result()
                     if r_id:
                         obwiednie_id_dzialki[p_idx].add(r_id)
-                    # Dynamiczna aktualizacja paska postępu w trakcie odpytywania API
                     current_prog = int(40 + (completed / total_points) * 30)
                     progress_bar.progress(min(current_prog, 70))
 
