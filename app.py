@@ -73,7 +73,7 @@ uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", ty
 if uploaded_file is not None:
     # Zapis tymczasowy w pamięci
     try:
-        doc = ezdxf.readfrom(io.BytesIO(uploaded_file.getvalue()))
+        doc = ezdxf.read(io.BytesIO(uploaded_file.getvalue()))
         msp = doc.modelspace()
         layers = sorted(list(set([layer.dxf.name for layer in doc.layers])))
     except Exception as e:
