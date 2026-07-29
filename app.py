@@ -11,7 +11,7 @@ import tempfile
 import concurrent.futures
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="wide")
+st.set_page_config(page_title="Obliczanie powierzchni zniszczeń", layout="wide")
 
 st.title("Obliczanie powierzchni zniszczeń")
 st.write("Wrzuć plik DXF z trasą oraz powierzchnią zniszczeń, sprawdź natychmiastowy podgląd, a następnie wygeneruj raport i pobierz dane.")
