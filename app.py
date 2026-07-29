@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Obliczanie powierzchni zniszczeń", layout="wide")
 
 st.title("⚡ Obliczanie powierzchni zniszczeń")
-st.write("Moduł analizy przestrzennej i raportowania uszkodzeń infrastruktury liniowej.")
+st.write("Moduł analizy przestrzennej i raportowania uszkodzeń na trasie linii kablowej.")
 
 # Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
