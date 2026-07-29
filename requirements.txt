@@ -1,0 +1,7 @@
+streamlit
+ezdxf
+shapely
+geopandas
+pandas
+requests
+openpyxl
