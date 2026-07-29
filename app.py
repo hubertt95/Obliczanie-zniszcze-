@@ -77,7 +77,6 @@ uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", ty
 
 if uploaded_file is not None:
     try:
-        # Zapis pliku tymczasowego i odczyt przez readfile (100% odporny na błędy kodowania i formatu)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_path = tmp_file.name
@@ -254,9 +253,14 @@ if uploaded_file is not None:
                 y_offset2 -= 1.0
             out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_zbiorcza)} m\\U+00B2", dxfattribs={'insert': (tabela2_x, y_offset2 - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
 
-            dxf_bytes = io.BytesIO()
-            out_doc.write(dxf_bytes)
-            dxf_bytes.seek(0)
+            # Bezpieczny zapis pliku DXF przez plik tymczasowy
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_out:
+                out_doc.saveas(tmp_out.name)
+                tmp_out_path = tmp_out.name
+
+            with open(tmp_out_path, "rb") as f:
+                dxf_bytes = f.read()
+            os.remove(tmp_out_path)
 
             excel_bytes = io.BytesIO()
             with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
