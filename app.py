@@ -13,8 +13,8 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Obliczanie powierzchni zniszczeń", layout="wide")
 
-st.title("Obliczanie powierzchni zniszczeń")
-st.write("Wrzuć plik DXF z trasą oraz powierzchnią zniszczeń, sprawdź natychmiastowy podgląd, a następnie wygeneruj raport i pobierz dane.")
+st.title("⚡ Obliczanie powierzchni zniszczeń")
+st.write("Moduł analizy przestrzennej i raportowania uszkodzeń infrastruktury liniowej.")
 
 # Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
@@ -92,7 +92,7 @@ def pobierz_dane_dzialki_po_id(id_dzialki, srid):
 
 # --- GŁÓWNA APLIKACJA STREAMLIT ---
 
-uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", type=["dxf"])
+uploaded_file = st.file_uploader("Wczytaj plik wektorowy DXF zawierający geometrię trasy oraz polilinie zniszczeń", type=["dxf"])
 
 if uploaded_file is not None:
     try:
@@ -105,21 +105,20 @@ if uploaded_file is not None:
         layers = sorted(list(set([layer.dxf.name for layer in doc.layers])))
         os.remove(tmp_path)
     except Exception as e:
-        st.error(f"Nie można odczytać pliku DXF: {e}")
+        st.error(f"Błąd odczytu pliku DXF: {e}")
         st.stop()
 
-    st.success("Plik DXF wczytany pomyślnie!")
+    st.success("Plik DXF został pomyślnie zaimportowany.")
 
-    st.subheader("Ustawienia warstw i raportu")
+    st.subheader("Konfiguracja parametrów analizy")
     
-    kabel_layer = st.selectbox("Wybierz warstwę TRASY KABLA:", layers)
+    kabel_layer = st.selectbox("Warstwa trasy kablowej:", layers)
     default_zniszch_idx = layers.index("!!!zniszczenia") if "!!!zniszczenia" in layers else 0
-    zniszczenia_layer = st.selectbox("Wybierz warstwę ZNISZCZEŃ:", layers, index=default_zniszch_idx)
+    zniszczenia_layer = st.selectbox("Warstwa poligonów zniszczeń:", layers, index=default_zniszch_idx)
     
-    format_dzialki = st.selectbox("Format numeru działki:", ["Pełny (np. 143411_4.0001.1261)", "Obręb i Numer (np. 0001.1261)", "Tylko Numer (np. 1261)"])
-    format_pow = st.selectbox("Zaokrąglenie powierzchni:", ["2 miejsca po przecinku (np. 11.44)", "1 miejsce po przecinku (np. 11.4)", "Brak - liczby całkowite (np. 11)"])
+    format_dzialki = st.selectbox("Format identyfikatora działki ewidencyjnej:", ["Pełny (np. 143411_4.0001.1261)", "Obręb i Numer (np. 0001.1261)", "Tylko Numer (np. 1261)"])
+    format_pow = st.selectbox("Precyzja zapisu powierzchni:", ["2 miejsca po przecinku (np. 11.44)", "1 miejsce po przecinku (np. 11.4)", "Brak - liczby całkowite (np. 11)"])
 
-    # --- WSTĘPNE WBUDOWANIE GEOMETRII DO PODGLĄDU OD RAZU PO WYBORZE WARSTW ---
     kabel_geoms_tmp = []
     for entity in msp.query(f'*[layer=="{kabel_layer}"]'):
         if entity.dxftype() == 'LINE':
@@ -141,12 +140,12 @@ if uploaded_file is not None:
     st.session_state.kabel_geoms_raw = kabel_geoms_tmp
     st.session_state.zniszczenia_geoms_raw = zniszczenia_geoms_tmp
 
-    if st.button("🚀 Generuj raport i pobierz dane z GUGiK", type="primary"):
+    if st.button("Uruchom obliczenia i generuj raport", type="primary"):
         progress_bar = st.progress(0)
         status_text = st.empty()
 
         try:
-            status_text.text("Analiza geometrii z pliku DXF...")
+            status_text.text("Przetwarzanie geometrii wektorowej...")
             progress_bar.progress(10)
 
             zniszczenia_geoms = st.session_state.zniszczenia_geoms_raw
@@ -156,7 +155,7 @@ if uploaded_file is not None:
                 epsg_code = identify_epsg(zniszczenia_geoms[0].exterior.coords[0][0])
 
             if not zniszczenia_geoms:
-                st.error(f"Nie znaleziono zamkniętych polilinii na warstwie '{zniszczenia_layer}'!")
+                st.error(f"Brak zamkniętych polilinii na wybranej warstwie zniszczeń: '{zniszczenia_layer}'.")
                 st.stop()
 
             st.session_state.zniszczenia_gdf_oryginalne = gpd.GeoDataFrame(geometry=zniszczenia_geoms, crs=f"EPSG:{epsg_code}")
@@ -177,7 +176,7 @@ if uploaded_file is not None:
                 r_id = zapytaj_uldk_xy(pt.x, pt.y)
                 return p_idx, r_id
 
-            status_text.text(f"Odpytywanie serwera GUGiK ({len(all_points_with_meta)} punktów w tle)...")
+            status_text.text(f"Odpytywanie usługi ULDK GUGiK ({len(all_points_with_meta)} punktów)...")
             progress_bar.progress(40)
 
             completed = 0
@@ -198,10 +197,10 @@ if uploaded_file is not None:
                 wszystkie_unikalne_id.update(ids)
 
             if not wszystkie_unikalne_id:
-                st.error("Skan ukończony, ale GUGiK nie odnalazł działek w tych miejscach.")
+                st.error("Usługa ULDK nie zwróciła identyfikatorów działek dla wskazanego zakresu.")
                 st.stop()
 
-            status_text.text(f"Pobieranie geometrii dla {len(wszystkie_unikalne_id)} unikalnych działek...")
+            status_text.text(f"Pobieranie danych katastralnych dla {len(wszystkie_unikalne_id)} unikalnych działek...")
             progress_bar.progress(75)
 
             dane_dzialek = []
@@ -210,7 +209,7 @@ if uploaded_file is not None:
                 if dane:
                     dane_dzialek.append(dane)
 
-            status_text.text("Obliczanie przecięć i powierzchni (GIS)...")
+            status_text.text("Przeprowadzanie analizy topologicznej (GIS)...")
             progress_bar.progress(85)
 
             dzialki_df = pd.DataFrame(dane_dzialek).drop_duplicates(subset=['id_dzialki'])
@@ -222,7 +221,7 @@ if uploaded_file is not None:
 
             st.session_state.wyniki_df = st.session_state.intersekcja.groupby(['id_dzialki', 'wojewodztwo', 'powiat', 'obreb', 'pow_dzialki_m2'])['pow_zniszczenia_m2'].sum().reset_index()
 
-            status_text.text("Generowanie pliku DXF oraz Excel...")
+            status_text.text("Generowanie pliku wynikowego DXF oraz raportu Excel...")
             progress_bar.progress(95)
 
             def fmt_dzialka(dz_id):
@@ -302,20 +301,18 @@ if uploaded_file is not None:
             st.session_state.excel_data = excel_bytes.getvalue()
 
             progress_bar.progress(100)
-            status_text.text("Gotowe!")
-            st.success("Analiza zakończona sukcesem!")
+            status_text.text("Proces zakończony pomyślnie.")
+            st.success("Obliczenia wykonane prawidłowo.")
 
         except Exception as e:
-            st.error(f"Wystąpił błąd podczas przetwarzania: {e}")
+            st.error(f"Wystąpił błąd krytyczny podczas przetwarzania danych: {e}")
 
-# --- INTERAKTYWNY PODGLĄD GRAFICZNY W JAKOŚCI CAD (PLOTLY) ---
+# --- PODGLĄD GRAFICZNY CAD ---
 if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
-    st.subheader("🗺️ Interaktywny podgląd CAD")
-    st.info("💡 Proporcje osi 1:1 (skala geodezyjna zachowana bez zniekształceń).")
+    st.subheader("Podgląd graficzny geometrii")
 
     fig = go.Figure()
 
-    # 1. Trasa kabla (zawsze widoczna po wczytaniu DXF)
     for line in st.session_state.kabel_geoms_raw:
         x, y = line.xy
         fig.add_trace(go.Scatter(
@@ -326,7 +323,6 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
             hoverinfo='skip'
         ))
 
-    # 2. Zniszczenia z DXF (zawsze widoczne po wczytaniu DXF)
     for idx, poly in enumerate(st.session_state.zniszczenia_geoms_raw):
         x, y = poly.exterior.xy
         fig.add_trace(go.Scatter(
@@ -339,7 +335,6 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
             hoverinfo='skip'
         ))
 
-    # 3. Działki z GUGiK (pojawiają się po wygenerowaniu raportu)
     if st.session_state.dzialki_gdf is not None:
         for _, row in st.session_state.dzialki_gdf.iterrows():
             geom = row.geometry
@@ -354,34 +349,33 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
                     text=f"Działka: {row['id_dzialki']}<br>Obręb: {row['obreb']}"
                 ))
 
-    # Przywrócenie zachowania proporcji 1:1, żeby kształty nie były zniekształcone
     fig.update_layout(
-        title="Wizualizacja wektorowa CAD",
-        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1),
-        yaxis=dict(title="Y (metry)"),
+        title="",
+        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1, zeroline=False),
+        yaxis=dict(title="Y (metry)", zeroline=False),
         showlegend=False,
         height=700,
-        margin=dict(l=20, r=20, t=40, b=20)
+        margin=dict(l=20, r=20, t=20, b=20),
+        dragmode='pan'
     )
 
     st.plotly_chart(
         fig, 
         use_container_width=True, 
         config={
-            'scrollZoom': False, 
+            'scrollZoom': True, 
             'doubleClick': 'reset',
             'responsive': True
         }
     )
 
-# Wyświetlanie tabeli podglądowej i przycisków pobierania
 if st.session_state.wyniki_df is not None:
-    st.subheader("👀 Tabela podglądowa zestawienia zniszczeń")
+    st.subheader("Zestawienie wynikowe")
     st.dataframe(st.session_state.wyniki_df, use_container_width=True)
 
-    st.subheader("Pobieranie plików wynikowych")
+    st.subheader("Pobieranie dokumentacji")
     col1, col2 = st.columns(2)
     with col1:
-        st.download_button("📥 Pobierz wynikowy DXF", data=st.session_state.dxf_data, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
+        st.download_button("Pobierz plik DXF", data=st.session_state.dxf_data, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
     with col2:
-        st.download_button("📊 Pobierz zestawienie Excel", data=st.session_state.excel_data, file_name="Zestawienie_Zniszczen.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Pobierz raport Excel", data=st.session_state.excel_data, file_name="Zestawienie_Zniszczen.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
