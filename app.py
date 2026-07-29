@@ -6,6 +6,8 @@ import pandas as pd
 import requests
 import shapely.wkt
 import io
+import os
+import tempfile
 import concurrent.futures
 
 st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="centered")
@@ -75,11 +77,15 @@ uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", ty
 
 if uploaded_file is not None:
     try:
-        # Odczyt pliku w pamięci strumienia jako tekst (naprawa błędu z bytes-like object)
-        string_data = uploaded_file.getvalue().decode("utf-8", errors="ignore")
-        doc = ezdxf.read(io.StringIO(string_data))
+        # Zapisujemy plik tymczasowo na serwerze i czytamy przez readfile (obsługuje tekst i binaria DXF)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_path = tmp_file.name
+
+        doc = ezdxf.readfile(tmp_path)
         msp = doc.modelspace()
         layers = sorted(list(set([layer.dxf.name for layer in doc.layers])))
+        os.remove(tmp_path)
     except Exception as e:
         st.error(f"Nie można odczytać pliku DXF: {e}")
         st.stop()
@@ -90,7 +96,6 @@ if uploaded_file is not None:
     
     kabel_layer = st.selectbox("Wybierz warstwę TRASY KABLA:", layers)
     
-    # Wybór jednej warstwy zniszczeń z rozwijanej listy
     default_zniszch_idx = layers.index("!!!zniszczenia") if "!!!zniszczenia" in layers else 0
     zniszczenia_layer = st.selectbox("Wybierz warstwę ZNISZCZEŃ:", layers, index=default_zniszch_idx)
     
@@ -233,7 +238,7 @@ if uploaded_file is not None:
                 out_doc.write(dxf_bytes)
                 dxf_bytes.seek(0)
 
-                # Zapis dwuzakładowego pliku Excel do pamięci
+                # Zapis pliku Excel do pamięci
                 excel_bytes = io.BytesIO()
                 with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
                     intersekcja_excel = intersekcja.drop(columns=['geometry'], errors='ignore')
@@ -243,7 +248,6 @@ if uploaded_file is not None:
 
                 st.success("Analiza zakończona sukcesem!")
                 
-                # Przyciski pobierania plików w interfejsie Streamlit
                 col1, col2 = st.columns(2)
                 with col1:
                     st.download_button("📥 Pobierz wynikowy DXF", data=dxf_bytes, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
