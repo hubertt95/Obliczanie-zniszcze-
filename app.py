@@ -6,7 +6,8 @@ import pandas as pd
 import requests
 import shapely.wkt
 import io
-import zipfile
+import os
+import tempfile
 import concurrent.futures
 
 st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="centered")
@@ -72,13 +73,17 @@ uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", ty
 
 if uploaded_file is not None:
     try:
-        # Bezpieczna konwersja przesłanego pliku na bajty dla ezdxf.read[cite: 11]
-        bytes_data = uploaded_file.getvalue()
-        if isinstance(bytes_data, str):
-            bytes_data = bytes_data.encode("utf-8", errors="ignore")
-        doc = ezdxf.read(io.BytesIO(bytes_data))
+        # Zapisujemy plik tymczasowo na serwerze i czytamy przez readfile (najbezpieczniejsza metoda ezdxf)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_path = tmp_file.name
+
+        doc = ezdxf.readfile(tmp_path)
         msp = doc.modelspace()
         layers = sorted(list(set([layer.dxf.name for layer in doc.layers])))
+        
+        # Sprzątamy plik tymczasowy
+        os.remove(tmp_path)
     except Exception as e:
         st.error(f"Nie można odczytać pliku DXF: {e}")
         st.stop()
@@ -90,7 +95,6 @@ if uploaded_file is not None:
     
     kabel_layer = st.selectbox("Wybierz warstwę TRASY KABLA:", layers)
     
-    # Domyślne zaznaczenie lub wpisanie warstwy zniszczeń
     default_zniszczenia = "!!!zniszczenia" if "!!!zniszczenia" in layers else layers[0]
     zniszczenia_layers_input = st.text_input("Warstwy ZNISZCZEŃ (oddziel przecinkami, jeśli kilka):", value=default_zniszczenia)
     
@@ -152,7 +156,6 @@ if uploaded_file is not None:
                     st.stop()
 
                 dane_dzialek = []
-                cache_dzialek = {}
                 for id_dz in wszystkie_unikalne_id:
                     dane = pobierz_dane_dzialki_po_id(id_dz, epsg_code)
                     if dane:
@@ -167,7 +170,6 @@ if uploaded_file is not None:
 
                 wyniki = intersekcja.groupby(['id_dzialki', 'wojewodztwo', 'powiat', 'obreb', 'pow_dzialki_m2'])['pow_zniszczenia_m2'].sum().reset_index()
 
-                # Formatowanie tekstów do DXF
                 def fmt_dzialka(dz_id):
                     parts = str(dz_id).split('.')
                     if format_dzialki.startswith("Obręb"):
@@ -183,7 +185,6 @@ if uploaded_file is not None:
                         return f"{area:.0f}"
                     return f"{area:.2f}"
 
-                # Tworzenie nowego DXF
                 out_doc = ezdxf.new('R2010')
                 out_msp = out_doc.modelspace()
                 out_doc.layers.add(name='DZIALKI', color=3)
@@ -208,7 +209,6 @@ if uploaded_file is not None:
                 bbox = zniszczenia_gdf_oryginalne.total_bounds
                 tabela_x, tabela_y = bbox[2] + 20, bbox[3] 
 
-                # Tabela 1
                 out_msp.add_mtext("ZESTAWIENIE SZCZEGOLOWE ZNISZCZEN", dxfattribs={'insert': (tabela_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
                 y_offset = tabela_y - 1.5
                 suma_szczegolowa = 0
@@ -219,7 +219,6 @@ if uploaded_file is not None:
                     y_offset -= 1.0
                 out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_szczegolowa)} m\\U+00B2", dxfattribs={'insert': (tabela_x, y_offset - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
 
-                # Tabela 2
                 tabela2_x = tabela_x + 60
                 out_msp.add_mtext("PODSUMOWANIE DLA DZIALEK", dxfattribs={'insert': (tabela2_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
                 y_offset2 = tabela_y - 1.5
@@ -231,7 +230,6 @@ if uploaded_file is not None:
                     y_offset2 -= 1.0
                 out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_zbiorcza)} m\\U+00B2", dxfattribs={'insert': (tabela2_x, y_offset2 - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
 
-                # Zapis do pamięci jako bajty do pobrania
                 dxf_bytes = io.BytesIO()
                 out_doc.write(dxf_bytes)
                 dxf_bytes.seek(0)
@@ -245,7 +243,6 @@ if uploaded_file is not None:
 
                 st.success("Analiza zakończona sukcesem!")
                 
-                # Przyciski do pobrania plików
                 col1, col2 = st.columns(2)
                 with col1:
                     st.download_button("📥 Pobierz wynikowy DXF", data=dxf_bytes, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
