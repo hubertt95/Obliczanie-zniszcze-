@@ -15,7 +15,8 @@ st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="center
 st.title("⚡ Geodezja: Kalkulator Zniszczeń Kabla")
 st.write("Wrzuć plik DXF, wybierz warstwy i pobierz gotowy raport oraz DXF bezpośrednio w przeglądarce.")
 
-# Funkcje pomocnicze
+# --- FUNKCJE POMOCNICZE ---
+
 def identify_epsg(x):
     strefa = str(x)[0] 
     if strefa == '5': return 2176
@@ -35,6 +36,8 @@ def get_sampled_points(poly, distance=5.0):
         points.append(boundary.interpolate(d))
         d += distance
     return points
+
+# --- FUNKCJE API GUGiK ---
 
 def zapytaj_uldk_xy(x, y):
     url = f"https://uldk.gugik.gov.pl/?request=GetParcelByXY&xy={x},{y}&result=id"
@@ -68,12 +71,12 @@ def pobierz_dane_dzialki_po_id(id_dzialki, srid):
         pass
     return None
 
-# Krok 1: Wgranie pliku
+# --- GŁÓWNA APLIKACJA STREAMLIT ---
+
 uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", type=["dxf"])
 
 if uploaded_file is not None:
     try:
-        # Zapisujemy plik tymczasowo na serwerze i czytamy przez readfile (najbezpieczniejsza metoda ezdxf)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_path = tmp_file.name
@@ -81,8 +84,6 @@ if uploaded_file is not None:
         doc = ezdxf.readfile(tmp_path)
         msp = doc.modelspace()
         layers = sorted(list(set([layer.dxf.name for layer in doc.layers])))
-        
-        # Sprzątamy plik tymczasowy
         os.remove(tmp_path)
     except Exception as e:
         st.error(f"Nie można odczytać pliku DXF: {e}")
@@ -90,7 +91,6 @@ if uploaded_file is not None:
 
     st.success("Plik DXF wczytany pomyślnie!")
 
-    # Krok 2: Wybór ustawień
     st.subheader("Ustawienia warstw i raportu")
     
     kabel_layer = st.selectbox("Wybierz warstwę TRASY KABLA:", layers)
@@ -102,7 +102,7 @@ if uploaded_file is not None:
     format_pow = st.selectbox("Zaokrąglenie powierzchni:", ["2 miejsca po przecinku (np. 11.44)", "1 miejsce po przecinku (np. 11.4)", "Brak - liczby całkowite (np. 11)"])
 
     if st.button("🚀 Generuj raport i pliki wynikowe", type="primary"):
-        with st.spinner("Przetwarzanie geometrii i pobieranie danych z GUGiK..."):
+        with st.spinner("Przetwarzanie geometrii i szybkie pobieranie danych z GUGiK..."):
             try:
                 layers_zniszczenia = [l.strip() for l in zniszczenia_layers_input.split(',') if l.strip()]
                 zniszczenia_geoms = []
@@ -127,7 +127,7 @@ if uploaded_file is not None:
                 zniszczenia_gdf_oryginalne = gpd.GeoDataFrame(geometry=zniszczenia_geoms, crs=f"EPSG:{epsg_code}")
                 zniszczenia_gdf_1992 = zniszczenia_gdf_oryginalne.to_crs(epsg=2180)
 
-                # Próbkowanie i zapytania do API
+                # Wielowątkowe pobieranie punktów dla wszystkich obwiedni
                 all_points_with_meta = []
                 for idx, poly in enumerate(zniszczenia_gdf_1992.geometry.tolist()):
                     pts = get_sampled_points(poly, distance=5.0)
@@ -170,6 +170,7 @@ if uploaded_file is not None:
 
                 wyniki = intersekcja.groupby(['id_dzialki', 'wojewodztwo', 'powiat', 'obreb', 'pow_dzialki_m2'])['pow_zniszczenia_m2'].sum().reset_index()
 
+                # Funkcje formatujące
                 def fmt_dzialka(dz_id):
                     parts = str(dz_id).split('.')
                     if format_dzialki.startswith("Obręb"):
@@ -185,6 +186,7 @@ if uploaded_file is not None:
                         return f"{area:.0f}"
                     return f"{area:.2f}"
 
+                # Tworzenie pliku wynikowego DXF
                 out_doc = ezdxf.new('R2010')
                 out_msp = out_doc.modelspace()
                 out_doc.layers.add(name='DZIALKI', color=3)
@@ -209,6 +211,7 @@ if uploaded_file is not None:
                 bbox = zniszczenia_gdf_oryginalne.total_bounds
                 tabela_x, tabela_y = bbox[2] + 20, bbox[3] 
 
+                # Tabela 1: Szczegółowa
                 out_msp.add_mtext("ZESTAWIENIE SZCZEGOLOWE ZNISZCZEN", dxfattribs={'insert': (tabela_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
                 y_offset = tabela_y - 1.5
                 suma_szczegolowa = 0
@@ -219,6 +222,7 @@ if uploaded_file is not None:
                     y_offset -= 1.0
                 out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_szczegolowa)} m\\U+00B2", dxfattribs={'insert': (tabela_x, y_offset - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
 
+                # Tabela 2: Zbiorcza dla działek
                 tabela2_x = tabela_x + 60
                 out_msp.add_mtext("PODSUMOWANIE DLA DZIALEK", dxfattribs={'insert': (tabela2_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
                 y_offset2 = tabela_y - 1.5
@@ -230,10 +234,12 @@ if uploaded_file is not None:
                     y_offset2 -= 1.0
                 out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_zbiorcza)} m\\U+00B2", dxfattribs={'insert': (tabela2_x, y_offset2 - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
 
+                # Zapis wynikowego pliku DXF do pamięci
                 dxf_bytes = io.BytesIO()
                 out_doc.write(dxf_bytes)
                 dxf_bytes.seek(0)
 
+                # Zapis dwuzakładowego pliku Excel do pamięci
                 excel_bytes = io.BytesIO()
                 with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
                     intersekcja_excel = intersekcja.drop(columns=['geometry'], errors='ignore')
@@ -243,6 +249,7 @@ if uploaded_file is not None:
 
                 st.success("Analiza zakończona sukcesem!")
                 
+                # Przyciski pobierania plików w interfejsie Streamlit
                 col1, col2 = st.columns(2)
                 with col1:
                     st.download_button("📥 Pobierz wynikowy DXF", data=dxf_bytes, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
