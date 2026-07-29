@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Kalkulator powierzchni zniszczeń", layout="wide")
 
 st.title("Kalkulator powierzchni zniszczeń")
-st.write("Wrzuć plik DXF z powierzchniami zniszczeń oraz trasą kabla, sprawdź natychmiastow poprawność danych, pobierz geometrię działek, a następnie wygeneruj raport i pobierz dane.")
+st.write("Wrzuć plik DXF z powierzchniami zniszczeń oraz trasą kabla, sprawdź poprawność danych, pobierz geometrię działek, a następnie wygeneruj raport i pobierz dane.")
 
 # Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
