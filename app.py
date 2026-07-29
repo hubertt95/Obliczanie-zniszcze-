@@ -9,13 +9,14 @@ import io
 import os
 import tempfile
 import concurrent.futures
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="centered")
 
 st.title("⚡ Geodezja: Kalkulator Zniszczeń Kabla")
-st.write("Wrzuć plik DXF, wybierz warstwy i pobierz gotowy raport oraz DXF bezpośrednio w przeglądarce.")
+st.write("Wrzuć plik DXF, wybierz warstwy, podejrzyj dane graficznie i pobierz gotowy raport.")
 
-# Inicjalizacja pamięci sesji (żeby przyciski pobierania nie znikały)
+# Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
     st.session_state.dxf_data = None
 if "excel_data" not in st.session_state:
@@ -108,6 +109,50 @@ if uploaded_file is not None:
     
     format_dzialki = st.selectbox("Format numeru działki:", ["Pełny (np. 143411_4.0001.1261)", "Obręb i Numer (np. 0001.1261)", "Tylko Numer (np. 1261)"])
     format_pow = st.selectbox("Zaokrąglenie powierzchni:", ["2 miejsca po przecinku (np. 11.44)", "1 miejsce po przecinku (np. 11.4)", "Brak - liczby całkowite (np. 11)"])
+
+    # --- OKNO PODGLĄDU GRAFICZNEGO (MAPKA) PO WCZYTANIU PLIKU ---
+    st.subheader("🗺️ Podgląd graficzny wczytanych obiektów z DXF")
+    try:
+         podglad_geoms = []
+         podglad_kabel_geoms = []
+         
+         # Zniszczenia
+         for entity in msp.query(f'*[layer=="{zniszczenia_layer}"]'):
+             if entity.dxftype() == 'LWPOLYLINE':
+                 pts = [(p[0], p[1]) for p in entity.get_points(format='xy')]
+                 if len(pts) >= 3:
+                     p = Polygon(pts)
+                     if p.is_valid: podglad_geoms.append(p)
+
+         # Trasa kabla
+         for entity in msp.query(f'*[layer=="{kabel_layer}"]'):
+             if entity.dxftype() in ['LINE', 'LWPOLYLINE']:
+                 if entity.dxftype() == 'LINE':
+                     l = LineString([(entity.dxf.start[0], entity.dxf.start[1]), (entity.dxf.end[0], entity.dxf.end[1])])
+                     podglad_kabel_geoms.append(l)
+                 elif entity.dxftype() == 'LWPOLYLINE':
+                     pts = [(p[0], p[1]) for p in entity.get_points(format='xy')]
+                     if len(pts) >= 2:
+                         l = LineString(pts)
+                         podglad_kabel_geoms.append(l)
+
+         if podglad_geoms or podglad_kabel_geoms:
+             fig, ax = plt.subplots(figsize=(6, 6))
+             if podglad_geoms:
+                 gdf_p = gpd.GeoDataFrame(geometry=podglad_geoms)
+                 gdf_p.plot(ax=ax, color='red', alpha=0.5, edgecolor='black', label='Zniszczenia')
+             if podglad_kabel_geoms:
+                 gdf_k = gpd.GeoDataFrame(geometry=podglad_kabel_geoms)
+                 gdf_k.plot(ax=ax, color='blue', linewidth=2, label='Trasa kabla')
+             
+             ax.set_title("Podgląd układu geometrycznego")
+             ax.legend()
+             ax.set_axis_off()
+             st.pyplot(fig)
+         else:
+             st.info("Brak geometrii do wyświetlenia na wybranych warstwach.")
+    except Exception as map_err:
+         st.warning(f"Nie udało się wygenerować podglądu graficznego: {map_err}")
 
     if st.button("🚀 Generuj raport i pliki wynikowe", type="primary"):
         progress_bar = st.progress(0)
@@ -234,7 +279,7 @@ if uploaded_file is not None:
                 if isinstance(row.geometry, Polygon):
                     out_msp.add_lwpolyline(list(row.geometry.exterior.coords), dxfattribs={'layer': 'ZNISZCZENIA_WYNIK', 'color': 1})
                     centroid = row.geometry.centroid
-                    # Poprawiony format w dwóch linijkach (użycie zwykłego \n zamiast \\n)
+                    # Rozdzielone na dwie linijki przy użyciu standardowego \n
                     tekst = f"Dz: {fmt_dzialka(row['id_dzialki'])}\nP: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
                     out_msp.add_mtext(tekst, dxfattribs={'layer': 'OPISY', 'insert': (centroid.x, centroid.y), 'char_height': 0.5})
 
@@ -286,7 +331,7 @@ if uploaded_file is not None:
         except Exception as e:
             st.error(f"Wystąpił błąd podczas przetwarzania: {e}")
 
-# Wyświetlanie wyników oraz okna podglądu, jeśli są w pamięci sesji
+# Wyświetlanie tabeli podglądowej i przycisków pobierania (zapisanio w sesji)
 if st.session_state.wyniki_df is not None:
     st.subheader("👀 Okno podglądu zaimportowanych zniszczeń (Podsumowanie)")
     st.dataframe(st.session_state.wyniki_df, use_container_width=True)
