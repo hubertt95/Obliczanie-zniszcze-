@@ -71,10 +71,12 @@ def pobierz_dane_dzialki_po_id(id_dzialki, srid):
 uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", type=["dxf"])
 
 if uploaded_file is not None:
-    # Zapis tymczasowy w pamięci dla tekstu DXF
     try:
-        string_data = uploaded_file.getvalue().decode("utf-8", errors="ignore")
-        doc = ezdxf.readtext(io.StringIO(string_data))
+        # Konwersja przesłanego pliku na bajty i odczyt przez ezdxf.read
+        bytes_data = uploaded_file.getvalue()
+        if isinstance(bytes_data, str):
+            bytes_data = bytes_data.encode("utf-8", errors="ignore")
+        doc = ezdxf.read(io.BytesIO(bytes_data))
         msp = doc.modelspace()
         layers = sorted(list(set([layer.dxf.name for layer in doc.layers])))
     except Exception as e:
