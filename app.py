@@ -348,8 +348,3 @@ if st.session_state.wyniki_df is not None:
         st.download_button("📥 Pobierz wynikowy DXF", data=st.session_state.dxf_data, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
     with col2:
         st.download_button("📊 Pobierz zestawienie Excel", data=st.session_state.excel_data, file_name="Zestawienie_Zniszczen.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-[Adding Interactive Plotly Charts to a Streamlit App - YouTube](https://www.youtube.com/watch?v=3f-j-PZ5N8A)
-
-To learn more about implementing similar visualizations, check out this [Adding Interactive Plotly Charts to a Streamlit App](https://www.youtube.com/watch?v=3f-j-PZ5N8A).
-http://googleusercontent.com/youtube_content/1
