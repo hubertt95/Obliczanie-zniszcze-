@@ -5,3 +5,4 @@ geopandas
 pandas
 requests
 openpyxl
+matplotlib
