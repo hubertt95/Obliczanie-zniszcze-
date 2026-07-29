@@ -13,8 +13,8 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="wide")
 
-st.title("⚡ Geodezja: Kalkulator Zniszczeń Kabla")
-st.write("Wrzuć plik DXF, sprawdź natychmiastowy podgląd CAD, a następnie wygeneruj raport i pobierz dane.")
+st.title("Obliczanie powierzchni zniszczeń")
+st.write("Wrzuć plik DXF z trasą oraz powierzchnią zniszczeń, sprawdź natychmiastowy podgląd, a następnie wygeneruj raport i pobierz dane.")
 
 # Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
