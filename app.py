@@ -11,10 +11,10 @@ import tempfile
 import concurrent.futures
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Kalkulator powierzchni zniszczeń", layout="wide")
+st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="wide")
 
-st.title("Kalkulator powierzchni zniszczeń")
-st.write("Wrzuć plik DXF z powierzchniami zniszczeń oraz trasą kabla, sprawdź poprawność danych, pobierz geometrię działek, a następnie wygeneruj raport i pobierz dane.")
+st.title("⚡ Geodezja: Kalkulator Zniszczeń Kabla")
+st.write("Wrzuć plik DXF, sprawdź natychmiastowy podgląd CAD, a następnie wygeneruj raport i pobierz dane.")
 
 # Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
@@ -258,7 +258,8 @@ if uploaded_file is not None:
                 if isinstance(row.geometry, Polygon):
                     out_msp.add_lwpolyline(list(row.geometry.exterior.coords), dxfattribs={'layer': 'ZNISZCZENIA_WYNIK', 'color': 1})
                     centroid = row.geometry.centroid
-                    tekst = f"Dz: {fmt_dzialka(row['id_dzialki'])}\nP: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
+                    # Poprawione formatowanie powierzchni: czyste m2 zamiast kodów systemowych
+                    tekst = f"Dz: {fmt_dzialka(row['id_dzialki'])}\nP: {fmt_pow(row['pow_zniszczenia_m2'])} m2"
                     out_msp.add_mtext(tekst, dxfattribs={'layer': 'OPISY', 'insert': (centroid.x, centroid.y), 'char_height': 0.5})
 
             bbox = st.session_state.zniszczenia_gdf_oryginalne.total_bounds
@@ -269,10 +270,10 @@ if uploaded_file is not None:
             suma_szczegolowa = 0
             for i, row in st.session_state.intersekcja.iterrows():
                 suma_szczegolowa += row['pow_zniszczenia_m2']
-                linia_txt = f"Poligon {i+1} | Dz: {fmt_dzialka(row['id_dzialki'])} | Zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
+                linia_txt = f"Poligon {i+1} | Dz: {fmt_dzialka(row['id_dzialki'])} | Zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m2"
                 out_msp.add_mtext(linia_txt, dxfattribs={'insert': (tabela_x, y_offset), 'char_height': 0.5, 'layer': 'OPISY'})
                 y_offset -= 1.0
-            out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_szczegolowa)} m\\U+00B2", dxfattribs={'insert': (tabela_x, y_offset - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
+            out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_szczegolowa)} m2", dxfattribs={'insert': (tabela_x, y_offset - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
 
             tabela2_x = tabela_x + 60
             out_msp.add_mtext("PODSUMOWANIE DLA DZIALEK", dxfattribs={'insert': (tabela2_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
@@ -280,10 +281,10 @@ if uploaded_file is not None:
             suma_zbiorcza = 0
             for i, row in st.session_state.wyniki_df.iterrows():
                 suma_zbiorcza += row['pow_zniszczenia_m2']
-                linia_txt = f"Dz: {fmt_dzialka(row['id_dzialki'])} | Lacznie zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
+                linia_txt = f"Dz: {fmt_dzialka(row['id_dzialki'])} | Lacznie zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m2"
                 out_msp.add_mtext(linia_txt, dxfattribs={'insert': (tabela2_x, y_offset2), 'char_height': 0.5, 'layer': 'OPISY'})
                 y_offset2 -= 1.0
-            out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_zbiorcza)} m\\U+00B2", dxfattribs={'insert': (tabela2_x, y_offset2 - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
+            out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_zbiorcza)} m2", dxfattribs={'insert': (tabela2_x, y_offset2 - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_out:
                 out_doc.saveas(tmp_out.name)
@@ -311,7 +312,7 @@ if uploaded_file is not None:
 # --- INTERAKTYWNY PODGLĄD GRAFICZNY W JAKOŚCI CAD (PLOTLY) ---
 if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
     st.subheader("🗺️ Interaktywny podgląd CAD")
-    st.info("💡 Użyj scrolla myszy do przybliżania (w miejscu kursora) oraz kliknij i przeciągnij, aby przesunąć mapę.")
+    st.info("💡 Na komputerze: użyj scrolla myszy do przybliżania i przeciągnij, aby przesunąć. Na telefonie: użyj uszczypnięcia (pinch-to-zoom) dwoma palcami i przesuń dotykiem.")
 
     fig = go.Figure()
 
@@ -359,11 +360,20 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
         showlegend=True,
         height=700,
         margin=dict(l=20, r=20, t=40, b=20),
-        dragmode='pan'  # Domyślne narzędzie to łapanie i przesuwanie mapy
+        dragmode='pan'  # Domyślne narzędzie to przesuwanie mapy (pan)
     )
 
-    # Włączenie pełnego wsparcia dla zoomu kółkiem myszy w miejscu kursora
-    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'editable': False})
+    # Konfiguracja wspierająca zoom kółkiem myszy oraz gesty dotykowe (pinch-to-zoom na telefonie)
+    st.plotly_chart(
+        fig, 
+        use_container_width=True, 
+        config={
+            'scrollZoom': True, 
+            'edits': {'shapePosition': True},
+            'doubleClick': 'reset',
+            'responsive': True
+        }
+    )
 
 # Wyświetlanie tabeli podglądowej i przycisków pobierania
 if st.session_state.wyniki_df is not None:
