@@ -15,6 +15,14 @@ st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="center
 st.title("⚡ Geodezja: Kalkulator Zniszczeń Kabla")
 st.write("Wrzuć plik DXF, wybierz warstwy i pobierz gotowy raport oraz DXF bezpośrednio w przeglądarce.")
 
+# Inicjalizacja pamięci sesji (żeby przyciski pobierania nie znikały)
+if "dxf_data" not in st.session_state:
+    st.session_state.dxf_data = None
+if "excel_data" not in st.session_state:
+    st.session_state.excel_data = None
+if "wyniki_df" not in st.session_state:
+    st.session_state.wyniki_df = None
+
 # --- FUNKCJE POMOCNICZE ---
 
 def identify_epsg(x):
@@ -226,7 +234,8 @@ if uploaded_file is not None:
                 if isinstance(row.geometry, Polygon):
                     out_msp.add_lwpolyline(list(row.geometry.exterior.coords), dxfattribs={'layer': 'ZNISZCZENIA_WYNIK', 'color': 1})
                     centroid = row.geometry.centroid
-                    tekst = f"Dz: {fmt_dzialka(row['id_dzialki'])}\\nP: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
+                    # Poprawiony format w dwóch linijkach (użycie zwykłego \n zamiast \\n)
+                    tekst = f"Dz: {fmt_dzialka(row['id_dzialki'])}\nP: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
                     out_msp.add_mtext(tekst, dxfattribs={'layer': 'OPISY', 'insert': (centroid.x, centroid.y), 'char_height': 0.5})
 
             bbox = zniszczenia_gdf_oryginalne.total_bounds
@@ -253,13 +262,12 @@ if uploaded_file is not None:
                 y_offset2 -= 1.0
             out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_zbiorcza)} m\\U+00B2", dxfattribs={'insert': (tabela2_x, y_offset2 - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
 
-            # Bezpieczny zapis pliku DXF przez plik tymczasowy
             with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_out:
                 out_doc.saveas(tmp_out.name)
                 tmp_out_path = tmp_out.name
 
             with open(tmp_out_path, "rb") as f:
-                dxf_bytes = f.read()
+                st.session_state.dxf_data = f.read()
             os.remove(tmp_out_path)
 
             excel_bytes = io.BytesIO()
@@ -268,17 +276,24 @@ if uploaded_file is not None:
                 intersekcja_excel.to_excel(writer, sheet_name='Szczegółowe', index=False)
                 wyniki.to_excel(writer, sheet_name='Podsumowanie', index=False)
             excel_bytes.seek(0)
+            st.session_state.excel_data = excel_bytes.getvalue()
+            st.session_state.wyniki_df = wyniki
 
             progress_bar.progress(100)
             status_text.text("Gotowe!")
-
             st.success("Analiza zakończona sukcesem!")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button("📥 Pobierz wynikowy DXF", data=dxf_bytes, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
-            with col2:
-                st.download_button("📊 Pobierz zestawienie Excel", data=excel_bytes, file_name="Zestawienie_Zniszczen.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         except Exception as e:
             st.error(f"Wystąpił błąd podczas przetwarzania: {e}")
+
+# Wyświetlanie wyników oraz okna podglądu, jeśli są w pamięci sesji
+if st.session_state.wyniki_df is not None:
+    st.subheader("👀 Okno podglądu zaimportowanych zniszczeń (Podsumowanie)")
+    st.dataframe(st.session_state.wyniki_df, use_container_width=True)
+
+    st.subheader("Pobieranie plików wynikowych")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button("📥 Pobierz wynikowy DXF", data=st.session_state.dxf_data, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
+    with col2:
+        st.download_button("📊 Pobierz zestawienie Excel", data=st.session_state.excel_data, file_name="Zestawienie_Zniszczen.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
