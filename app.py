@@ -354,7 +354,7 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
 
     fig.update_layout(
         title="Wizualizacja wektorowa CAD",
-        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1, zoom=['wheel', 'pan']),
+        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1),
         yaxis=dict(title="Y (metry)"),
         showlegend=True,
         height=700,
