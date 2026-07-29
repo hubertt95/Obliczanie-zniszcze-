@@ -9,12 +9,12 @@ import io
 import os
 import tempfile
 import concurrent.futures
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="centered")
+st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="wide")
 
 st.title("⚡ Geodezja: Kalkulator Zniszczeń Kabla")
-st.write("Wrzuć plik DXF, wybierz warstwy, podejrzyj dane graficznie i pobierz gotowy raport.")
+st.write("Wrzuć plik DXF, wygeneruj raport i przeglądaj geometrie w interaktywnej jakości CAD.")
 
 # Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
@@ -23,6 +23,12 @@ if "excel_data" not in st.session_state:
     st.session_state.excel_data = None
 if "wyniki_df" not in st.session_state:
     st.session_state.wyniki_df = None
+if "intersekcja" not in st.session_state:
+    st.session_state.intersekcja = None
+if "dzialki_gdf" not in st.session_state:
+    st.session_state.dzialki_gdf = None
+if "zniszczenia_gdf_oryginalne" not in st.session_state:
+    st.session_state.zniszczenia_gdf_oryginalne = None
 
 # --- FUNKCJE POMOCNICZE ---
 
@@ -103,58 +109,13 @@ if uploaded_file is not None:
     st.subheader("Ustawienia warstw i raportu")
     
     kabel_layer = st.selectbox("Wybierz warstwę TRASY KABLA:", layers)
-    
     default_zniszch_idx = layers.index("!!!zniszczenia") if "!!!zniszczenia" in layers else 0
     zniszczenia_layer = st.selectbox("Wybierz warstwę ZNISZCZEŃ:", layers, index=default_zniszch_idx)
     
     format_dzialki = st.selectbox("Format numeru działki:", ["Pełny (np. 143411_4.0001.1261)", "Obręb i Numer (np. 0001.1261)", "Tylko Numer (np. 1261)"])
     format_pow = st.selectbox("Zaokrąglenie powierzchni:", ["2 miejsca po przecinku (np. 11.44)", "1 miejsce po przecinku (np. 11.4)", "Brak - liczby całkowite (np. 11)"])
 
-    # --- OKNO PODGLĄDU GRAFICZNEGO (MAPKA) PO WCZYTANIU PLIKU ---
-    st.subheader("🗺️ Podgląd graficzny wczytanych obiektów z DXF")
-    try:
-         podglad_geoms = []
-         podglad_kabel_geoms = []
-         
-         # Zniszczenia
-         for entity in msp.query(f'*[layer=="{zniszczenia_layer}"]'):
-             if entity.dxftype() == 'LWPOLYLINE':
-                 pts = [(p[0], p[1]) for p in entity.get_points(format='xy')]
-                 if len(pts) >= 3:
-                     p = Polygon(pts)
-                     if p.is_valid: podglad_geoms.append(p)
-
-         # Trasa kabla
-         for entity in msp.query(f'*[layer=="{kabel_layer}"]'):
-             if entity.dxftype() in ['LINE', 'LWPOLYLINE']:
-                 if entity.dxftype() == 'LINE':
-                     l = LineString([(entity.dxf.start[0], entity.dxf.start[1]), (entity.dxf.end[0], entity.dxf.end[1])])
-                     podglad_kabel_geoms.append(l)
-                 elif entity.dxftype() == 'LWPOLYLINE':
-                     pts = [(p[0], p[1]) for p in entity.get_points(format='xy')]
-                     if len(pts) >= 2:
-                         l = LineString(pts)
-                         podglad_kabel_geoms.append(l)
-
-         if podglad_geoms or podglad_kabel_geoms:
-             fig, ax = plt.subplots(figsize=(6, 6))
-             if podglad_geoms:
-                 gdf_p = gpd.GeoDataFrame(geometry=podglad_geoms)
-                 gdf_p.plot(ax=ax, color='red', alpha=0.5, edgecolor='black', label='Zniszczenia')
-             if podglad_kabel_geoms:
-                 gdf_k = gpd.GeoDataFrame(geometry=podglad_kabel_geoms)
-                 gdf_k.plot(ax=ax, color='blue', linewidth=2, label='Trasa kabla')
-             
-             ax.set_title("Podgląd układu geometrycznego")
-             ax.legend()
-             ax.set_axis_off()
-             st.pyplot(fig)
-         else:
-             st.info("Brak geometrii do wyświetlenia na wybranych warstwach.")
-    except Exception as map_err:
-         st.warning(f"Nie udało się wygenerować podglądu graficznego: {map_err}")
-
-    if st.button("🚀 Generuj raport i pliki wynikowe", type="primary"):
+    if st.button("🚀 Generuj raport i pobierz dane z GUGiK", type="primary"):
         progress_bar = st.progress(0)
         status_text = st.empty()
 
@@ -180,8 +141,8 @@ if uploaded_file is not None:
                 st.error(f"Nie znaleziono zamkniętych polilinii na warstwie '{zniszczenia_layer}'!")
                 st.stop()
 
-            zniszczenia_gdf_oryginalne = gpd.GeoDataFrame(geometry=zniszczenia_geoms, crs=f"EPSG:{epsg_code}")
-            zniszczenia_gdf_1992 = zniszczenia_gdf_oryginalne.to_crs(epsg=2180)
+            st.session_state.zniszczenia_gdf_oryginalne = gpd.GeoDataFrame(geometry=zniszczenia_geoms, crs=f"EPSG:{epsg_code}")
+            zniszczenia_gdf_1992 = st.session_state.zniszczenia_gdf_oryginalne.to_crs(epsg=2180)
 
             status_text.text("Generowanie punktów kontrolnych dla obwiedni...")
             progress_bar.progress(25)
@@ -235,13 +196,13 @@ if uploaded_file is not None:
             progress_bar.progress(85)
 
             dzialki_df = pd.DataFrame(dane_dzialek).drop_duplicates(subset=['id_dzialki'])
-            dzialki_gdf = gpd.GeoDataFrame(dzialki_df, geometry='geometry', crs=f"EPSG:{epsg_code}")
+            st.session_state.dzialki_gdf = gpd.GeoDataFrame(dzialki_df, geometry='geometry', crs=f"EPSG:{epsg_code}")
 
-            dzialki_gdf['pow_dzialki_m2'] = dzialki_gdf.geometry.area
-            intersekcja = gpd.overlay(dzialki_gdf, zniszczenia_gdf_oryginalne, how='intersection')
-            intersekcja['pow_zniszczenia_m2'] = intersekcja.geometry.area
+            st.session_state.dzialki_gdf['pow_dzialki_m2'] = st.session_state.dzialki_gdf.geometry.area
+            st.session_state.intersekcja = gpd.overlay(st.session_state.dzialki_gdf, st.session_state.zniszczenia_gdf_oryginalne, how='intersection')
+            st.session_state.intersekcja['pow_zniszczenia_m2'] = st.session_state.intersekcja.geometry.area
 
-            wyniki = intersekcja.groupby(['id_dzialki', 'wojewodztwo', 'powiat', 'obreb', 'pow_dzialki_m2'])['pow_zniszczenia_m2'].sum().reset_index()
+            st.session_state.wyniki_df = st.session_state.intersekcja.groupby(['id_dzialki', 'wojewodztwo', 'powiat', 'obreb', 'pow_dzialki_m2'])['pow_zniszczenia_m2'].sum().reset_index()
 
             status_text.text("Generowanie pliku DXF oraz Excel...")
             progress_bar.progress(95)
@@ -271,25 +232,24 @@ if uploaded_file is not None:
             for entity in msp.query(f'*[layer=="{kabel_layer}"]'):
                 out_msp.add_entity(entity.copy())
 
-            for geom in dzialki_gdf.geometry:
+            for geom in st.session_state.dzialki_gdf.geometry:
                 if isinstance(geom, Polygon):
                     out_msp.add_lwpolyline(list(geom.exterior.coords), dxfattribs={'layer': 'DZIALKI'})
 
-            for idx, row in intersekcja.iterrows():
+            for idx, row in st.session_state.intersekcja.iterrows():
                 if isinstance(row.geometry, Polygon):
                     out_msp.add_lwpolyline(list(row.geometry.exterior.coords), dxfattribs={'layer': 'ZNISZCZENIA_WYNIK', 'color': 1})
                     centroid = row.geometry.centroid
-                    # Rozdzielone na dwie linijki przy użyciu standardowego \n
                     tekst = f"Dz: {fmt_dzialka(row['id_dzialki'])}\nP: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
                     out_msp.add_mtext(tekst, dxfattribs={'layer': 'OPISY', 'insert': (centroid.x, centroid.y), 'char_height': 0.5})
 
-            bbox = zniszczenia_gdf_oryginalne.total_bounds
+            bbox = st.session_state.zniszczenia_gdf_oryginalne.total_bounds
             tabela_x, tabela_y = bbox[2] + 20, bbox[3] 
 
             out_msp.add_mtext("ZESTAWIENIE SZCZEGOLOWE ZNISZCZEN", dxfattribs={'insert': (tabela_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
             y_offset = tabela_y - 1.5
             suma_szczegolowa = 0
-            for i, row in intersekcja.iterrows():
+            for i, row in st.session_state.intersekcja.iterrows():
                 suma_szczegolowa += row['pow_zniszczenia_m2']
                 linia_txt = f"Poligon {i+1} | Dz: {fmt_dzialka(row['id_dzialki'])} | Zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
                 out_msp.add_mtext(linia_txt, dxfattribs={'insert': (tabela_x, y_offset), 'char_height': 0.5, 'layer': 'OPISY'})
@@ -300,7 +260,7 @@ if uploaded_file is not None:
             out_msp.add_mtext("PODSUMOWANIE DLA DZIALEK", dxfattribs={'insert': (tabela2_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
             y_offset2 = tabela_y - 1.5
             suma_zbiorcza = 0
-            for i, row in wyniki.iterrows():
+            for i, row in st.session_state.wyniki_df.iterrows():
                 suma_zbiorcza += row['pow_zniszczenia_m2']
                 linia_txt = f"Dz: {fmt_dzialka(row['id_dzialki'])} | Lacznie zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
                 out_msp.add_mtext(linia_txt, dxfattribs={'insert': (tabela2_x, y_offset2), 'char_height': 0.5, 'layer': 'OPISY'})
@@ -317,12 +277,11 @@ if uploaded_file is not None:
 
             excel_bytes = io.BytesIO()
             with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
-                intersekcja_excel = intersekcja.drop(columns=['geometry'], errors='ignore')
+                intersekcja_excel = st.session_state.intersekcja.drop(columns=['geometry'], errors='ignore')
                 intersekcja_excel.to_excel(writer, sheet_name='Szczegółowe', index=False)
-                wyniki.to_excel(writer, sheet_name='Podsumowanie', index=False)
+                st.session_state.wyniki_df.to_excel(writer, sheet_name='Podsumowanie', index=False)
             excel_bytes.seek(0)
             st.session_state.excel_data = excel_bytes.getvalue()
-            st.session_state.wyniki_df = wyniki
 
             progress_bar.progress(100)
             status_text.text("Gotowe!")
@@ -331,9 +290,56 @@ if uploaded_file is not None:
         except Exception as e:
             st.error(f"Wystąpił błąd podczas przetwarzania: {e}")
 
-# Wyświetlanie tabeli podglądowej i przycisków pobierania (zapisanio w sesji)
+# --- INTERAKTYWNY PODGLĄD GRAFICZNY W JAKOŚCI CAD (PLOTLY) ---
+if st.session_state.dzialki_gdf is not None:
+    st.subheader("🗺️ Interaktywny podgląd CAD (Działki, Zniszczenia i Trasa)")
+    st.info("💡 Możesz przybliżać (zoom), oddalać, przesuwać mapę kursorem oraz włączać/wyłączać warstwy w legendzie obok wykresów.")
+
+    fig = go.Figure()
+
+    # 1. Działki z GUGiK
+    for _, row in st.session_state.dzialki_gdf.iterrows():
+        geom = row.geometry
+        if geom.geom_type == 'Polygon':
+            x, y = geom.exterior.xy
+            fig.add_trace(go.Scatter(
+                x=list(x), y=list(y),
+                mode='lines',
+                line=dict(color='green', width=1.5),
+                name=f"Działka: {row['id_dzialki']}",
+                hoverinfo='text',
+                text=f"ID Działki: {row['id_dzialki']}<br>Obręb: {row['obreb']}"
+            ))
+
+    # 2. Obwiednie zniszczeń
+    if st.session_state.zniszczenia_gdf_oryginalne is not None:
+        for idx, row in st.session_state.zniszczenia_gdf_oryginalne.iterrows():
+            geom = row.geometry
+            if geom.geom_type == 'Polygon':
+                x, y = geom.exterior.xy
+                fig.add_trace(go.Scatter(
+                    x=list(x), y=list(y),
+                    mode='lines',
+                    line=dict(color='red', width=2),
+                    fill='toself',
+                    fillcolor='rgba(255, 0, 0, 0.2)',
+                    name=f"Zniszczenie #{idx+1}"
+                ))
+
+    fig.update_layout(
+        title="Wizualizacja wektorowa CAD",
+        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1),
+        yaxis=dict(title="Y (metry)"),
+        showlegend=True,
+        height=700,
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+# Wyświetlanie tabeli podglądowej i przycisków pobierania
 if st.session_state.wyniki_df is not None:
-    st.subheader("👀 Okno podglądu zaimportowanych zniszczeń (Podsumowanie)")
+    st.subheader("👀 Tabela podglądowa zestawienia zniszczeń")
     st.dataframe(st.session_state.wyniki_df, use_container_width=True)
 
     st.subheader("Pobieranie plików wynikowych")
@@ -342,3 +348,8 @@ if st.session_state.wyniki_df is not None:
         st.download_button("📥 Pobierz wynikowy DXF", data=st.session_state.dxf_data, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
     with col2:
         st.download_button("📊 Pobierz zestawienie Excel", data=st.session_state.excel_data, file_name="Zestawienie_Zniszczen.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+[Adding Interactive Plotly Charts to a Streamlit App - YouTube](https://www.youtube.com/watch?v=3f-j-PZ5N8A)
+
+To learn more about implementing similar visualizations, check out this [Adding Interactive Plotly Charts to a Streamlit App](https://www.youtube.com/watch?v=3f-j-PZ5N8A).
+http://googleusercontent.com/youtube_content/1
