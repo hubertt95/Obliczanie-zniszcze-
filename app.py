@@ -356,15 +356,14 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
 
     fig.update_layout(
         title="Wizualizacja wektorowa CAD",
-        xaxis=dict(title="X (metry)", showlegend=False),
-        yaxis=dict(title="Y (metry)", showlegend=False),
-        showlegend=False,  # Całkowite ukrycie legendy
+        xaxis=dict(title="X (metry)"),
+        yaxis=dict(title="Y (metry)"),
+        showlegend=False,
         height=700,
         margin=dict(l=20, r=20, t=40, b=20),
-        dragmode='pan'  # Domyślne narzędzie to przesuwanie mapy (pan)
+        dragmode='pan'
     )
 
-    # Włączenie scrollZoom dla myszy oraz gestów dotykowych (pinch-to-zoom)
     st.plotly_chart(
         fig, 
         use_container_width=True, 
