@@ -6,8 +6,6 @@ import pandas as pd
 import requests
 import shapely.wkt
 import io
-import os
-import tempfile
 import concurrent.futures
 
 st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="centered")
@@ -77,15 +75,11 @@ uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", ty
 
 if uploaded_file is not None:
     try:
-        # Zapisujemy plik tymczasowo na serwerze i czytamy przez readfile (obsługuje tekst i binaria DXF)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            tmp_path = tmp_file.name
-
-        doc = ezdxf.readfile(tmp_path)
+        # Odczyt pliku DXF bezpośrednio ze strumienia bajtów w pamięci
+        file_bytes = io.BytesIO(uploaded_file.getvalue())
+        doc = ezdxf.read(file_bytes)
         msp = doc.modelspace()
         layers = sorted(list(set([layer.dxf.name for layer in doc.layers])))
-        os.remove(tmp_path)
     except Exception as e:
         st.error(f"Nie można odczytać pliku DXF: {e}")
         st.stop()
@@ -103,156 +97,180 @@ if uploaded_file is not None:
     format_pow = st.selectbox("Zaokrąglenie powierzchni:", ["2 miejsca po przecinku (np. 11.44)", "1 miejsce po przecinku (np. 11.4)", "Brak - liczby całkowite (np. 11)"])
 
     if st.button("🚀 Generuj raport i pliki wynikowe", type="primary"):
-        with st.spinner("Przetwarzanie geometrii i szybkie pobieranie danych z GUGiK..."):
-            try:
-                zniszczenia_geoms = []
-                epsg_code = 2177
+        # Elementy interfejsu dla paska postępu
+        progress_bar = st.progress(0)
+        status_text = st.empty()
 
-                obiekty = list(msp.query(f'*[layer=="{zniszczenia_layer}"]'))
-                for entity in obiekty:
-                    if entity.dxftype() == 'LWPOLYLINE':
-                        points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
-                        if len(points) >= 3:
-                            poly = Polygon(points)
-                            if poly.is_valid:
-                                zniszczenia_geoms.append(poly)
-                                if len(zniszczenia_geoms) == 1:
-                                    epsg_code = identify_epsg(points[0][0])
+        try:
+            status_text.text("Analiza geometrii z pliku DXF...")
+            progress_bar.progress(10)
 
-                if not zniszczenia_geoms:
-                    st.error(f"Nie znaleziono zamkniętych polilinii na warstwie '{zniszczenia_layer}'!")
-                    st.stop()
+            zniszczenia_geoms = []
+            epsg_code = 2177
 
-                zniszczenia_gdf_oryginalne = gpd.GeoDataFrame(geometry=zniszczenia_geoms, crs=f"EPSG:{epsg_code}")
-                zniszczenia_gdf_1992 = zniszczenia_gdf_oryginalne.to_crs(epsg=2180)
+            obiekty = list(msp.query(f'*[layer=="{zniszczenia_layer}"]'))
+            for entity in obiekty:
+                if entity.dxftype() == 'LWPOLYLINE':
+                    points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
+                    if len(points) >= 3:
+                        poly = Polygon(points)
+                        if poly.is_valid:
+                            zniszczenia_geoms.append(poly)
+                            if len(zniszczenia_geoms) == 1:
+                                epsg_code = identify_epsg(points[0][0])
 
-                # Wielowątkowe pobieranie punktów dla obwiedni
-                all_points_with_meta = []
-                for idx, poly in enumerate(zniszczenia_gdf_1992.geometry.tolist()):
-                    pts = get_sampled_points(poly, distance=5.0)
-                    for pt in pts:
-                        all_points_with_meta.append((idx + 1, pt))
+            if not zniszczenia_geoms:
+                st.error(f"Nie znaleziono zamkniętych polilinii na warstwie '{zniszczenia_layer}'!")
+                st.stop()
 
-                obwiednie_id_dzialki = {i+1: set() for i in range(len(zniszczenia_gdf_1992))}
-                
-                def check_point(p_idx, pt):
-                    r_id = zapytaj_uldk_xy(pt.x, pt.y)
-                    return p_idx, r_id
+            zniszczenia_gdf_oryginalne = gpd.GeoDataFrame(geometry=zniszczenia_geoms, crs=f"EPSG:{epsg_code}")
+            zniszczenia_gdf_1992 = zniszczenia_gdf_oryginalne.to_crs(epsg=2180)
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-                    futures = [executor.submit(check_point, p_idx, pt) for p_idx, pt in all_points_with_meta]
-                    for future in concurrent.futures.as_completed(futures):
-                        p_idx, r_id = future.result()
-                        if r_id:
-                            obwiednie_id_dzialki[p_idx].add(r_id)
+            status_text.text("Generowanie punktów kontrolnych dla obwiedni...")
+            progress_bar.progress(25)
 
-                wszystkie_unikalne_id = set()
-                for ids in obwiednie_id_dzialki.values():
-                    wszystkie_unikalne_id.update(ids)
+            all_points_with_meta = []
+            for idx, poly in enumerate(zniszczenia_gdf_1992.geometry.tolist()):
+                pts = get_sampled_points(poly, distance=5.0)
+                for pt in pts:
+                    all_points_with_meta.append((idx + 1, pt))
 
-                if not wszystkie_unikalne_id:
-                    st.error("Skan ukończony, ale GUGiK nie odnalazł działek w tych miejscach.")
-                    st.stop()
+            obwiednie_id_dzialki = {i+1: set() for i in range(len(zniszczenia_gdf_1992))}
+            
+            def check_point(p_idx, pt):
+                r_id = zapytaj_uldk_xy(pt.x, pt.y)
+                return p_idx, r_id
 
-                dane_dzialek = []
-                for id_dz in wszystkie_unikalne_id:
-                    dane = pobierz_dane_dzialki_po_id(id_dz, epsg_code)
-                    if dane:
-                        dane_dzialek.append(dane)
+            status_text.text(f"Odpytywanie serwera GUGiK ({len(all_points_with_meta)} punktów w tle)...")
+            progress_bar.progress(40)
 
-                dzialki_df = pd.DataFrame(dane_dzialek).drop_duplicates(subset=['id_dzialki'])
-                dzialki_gdf = gpd.GeoDataFrame(dzialki_df, geometry='geometry', crs=f"EPSG:{epsg_code}")
+            completed = 0
+            total_points = len(all_points_with_meta)
 
-                dzialki_gdf['pow_dzialki_m2'] = dzialki_gdf.geometry.area
-                intersekcja = gpd.overlay(dzialki_gdf, zniszczenia_gdf_oryginalne, how='intersection')
-                intersekcja['pow_zniszczenia_m2'] = intersekcja.geometry.area
+            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+                futures = [executor.submit(check_point, p_idx, pt) for p_idx, pt in all_points_with_meta]
+                for future in concurrent.futures.as_completed(futures):
+                    completed += 1
+                    p_idx, r_id = future.result()
+                    if r_id:
+                        obwiednie_id_dzialki[p_idx].add(r_id)
+                    # Dynamiczna aktualizacja paska postępu w trakcie odpytywania API
+                    current_prog = int(40 + (completed / total_points) * 30)
+                    progress_bar.progress(min(current_prog, 70))
 
-                wyniki = intersekcja.groupby(['id_dzialki', 'wojewodztwo', 'powiat', 'obreb', 'pow_dzialki_m2'])['pow_zniszczenia_m2'].sum().reset_index()
+            wszystkie_unikalne_id = set()
+            for ids in obwiednie_id_dzialki.values():
+                wszystkie_unikalne_id.update(ids)
 
-                # Funkcje formatujące
-                def fmt_dzialka(dz_id):
-                    parts = str(dz_id).split('.')
-                    if format_dzialki.startswith("Obręb"):
-                        return f"{parts[-2]}.{parts[-1]}" if len(parts) >= 2 else str(dz_id)
-                    elif format_dzialki.startswith("Tylko"):
-                        return parts[-1] if len(parts) >= 1 else str(dz_id)
-                    return str(dz_id)
+            if not wszystkie_unikalne_id:
+                st.error("Skan ukończony, ale GUGiK nie odnalazł działek w tych miejscach.")
+                st.stop()
 
-                def fmt_pow(area):
-                    if format_pow.startswith("1"):
-                        return f"{area:.1f}"
-                    elif format_pow.startswith("Brak"):
-                        return f"{area:.0f}"
-                    return f"{area:.2f}"
+            status_text.text(f"Pobieranie geometrii dla {len(wszystkie_unikalne_id)} unikalnych działek...")
+            progress_bar.progress(75)
 
-                # Tworzenie pliku wynikowego DXF
-                out_doc = ezdxf.new('R2010')
-                out_msp = out_doc.modelspace()
-                out_doc.layers.add(name='DZIALKI', color=3)
-                out_doc.layers.add(name='ZNISZCZENIA_WYNIK', color=1)
-                out_doc.layers.add(name='OPISY', color=7)
-                out_doc.layers.add(name='KABEL', color=5)
+            dane_dzialek = []
+            for id_dz in wszystkie_unikalne_id:
+                dane = pobierz_dane_dzialki_po_id(id_dz, epsg_code)
+                if dane:
+                    dane_dzialek.append(dane)
 
-                for entity in msp.query(f'*[layer=="{kabel_layer}"]'):
-                    out_msp.add_entity(entity.copy())
+            status_text.text("Obliczanie przecięć i powierzchni (GIS)...")
+            progress_bar.progress(85)
 
-                for geom in dzialki_gdf.geometry:
-                    if isinstance(geom, Polygon):
-                        out_msp.add_lwpolyline(list(geom.exterior.coords), dxfattribs={'layer': 'DZIALKI'})
+            dzialki_df = pd.DataFrame(dane_dzialek).drop_duplicates(subset=['id_dzialki'])
+            dzialki_gdf = gpd.GeoDataFrame(dzialki_df, geometry='geometry', crs=f"EPSG:{epsg_code}")
 
-                for idx, row in intersekcja.iterrows():
-                    if isinstance(row.geometry, Polygon):
-                        out_msp.add_lwpolyline(list(row.geometry.exterior.coords), dxfattribs={'layer': 'ZNISZCZENIA_WYNIK', 'color': 1})
-                        centroid = row.geometry.centroid
-                        tekst = f"Dz: {fmt_dzialka(row['id_dzialki'])}\\nP: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
-                        out_msp.add_mtext(tekst, dxfattribs={'layer': 'OPISY', 'insert': (centroid.x, centroid.y), 'char_height': 0.5})
+            dzialki_gdf['pow_dzialki_m2'] = dzialki_gdf.geometry.area
+            intersekcja = gpd.overlay(dzialki_gdf, zniszczenia_gdf_oryginalne, how='intersection')
+            intersekcja['pow_zniszczenia_m2'] = intersekcja.geometry.area
 
-                bbox = zniszczenia_gdf_oryginalne.total_bounds
-                tabela_x, tabela_y = bbox[2] + 20, bbox[3] 
+            wyniki = intersekcja.groupby(['id_dzialki', 'wojewodztwo', 'powiat', 'obreb', 'pow_dzialki_m2'])['pow_zniszczenia_m2'].sum().reset_index()
 
-                # Tabela 1: Szczegółowa
-                out_msp.add_mtext("ZESTAWIENIE SZCZEGOLOWE ZNISZCZEN", dxfattribs={'insert': (tabela_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
-                y_offset = tabela_y - 1.5
-                suma_szczegolowa = 0
-                for i, row in intersekcja.iterrows():
-                    suma_szczegolowa += row['pow_zniszczenia_m2']
-                    linia_txt = f"Poligon {i+1} | Dz: {fmt_dzialka(row['id_dzialki'])} | Zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
-                    out_msp.add_mtext(linia_txt, dxfattribs={'insert': (tabela_x, y_offset), 'char_height': 0.5, 'layer': 'OPISY'})
-                    y_offset -= 1.0
-                out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_szczegolowa)} m\\U+00B2", dxfattribs={'insert': (tabela_x, y_offset - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
+            status_text.text("Generowanie pliku DXF oraz Excel...")
+            progress_bar.progress(95)
 
-                # Tabela 2: Zbiorcza dla działek
-                tabela2_x = tabela_x + 60
-                out_msp.add_mtext("PODSUMOWANIE DLA DZIALEK", dxfattribs={'insert': (tabela2_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
-                y_offset2 = tabela_y - 1.5
-                suma_zbiorcza = 0
-                for i, row in wyniki.iterrows():
-                    suma_zbiorcza += row['pow_zniszczenia_m2']
-                    linia_txt = f"Dz: {fmt_dzialka(row['id_dzialki'])} | Lacznie zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
-                    out_msp.add_mtext(linia_txt, dxfattribs={'insert': (tabela2_x, y_offset2), 'char_height': 0.5, 'layer': 'OPISY'})
-                    y_offset2 -= 1.0
-                out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_zbiorcza)} m\\U+00B2", dxfattribs={'insert': (tabela2_x, y_offset2 - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
+            def fmt_dzialka(dz_id):
+                parts = str(dz_id).split('.')
+                if format_dzialki.startswith("Obręb"):
+                    return f"{parts[-2]}.{parts[-1]}" if len(parts) >= 2 else str(dz_id)
+                elif format_dzialki.startswith("Tylko"):
+                    return parts[-1] if len(parts) >= 1 else str(dz_id)
+                return str(dz_id)
 
-                # Zapis wynikowego pliku DXF do pamięci
-                dxf_bytes = io.BytesIO()
-                out_doc.write(dxf_bytes)
-                dxf_bytes.seek(0)
+            def fmt_pow(area):
+                if format_pow.startswith("1"):
+                    return f"{area:.1f}"
+                elif format_pow.startswith("Brak"):
+                    return f"{area:.0f}"
+                return f"{area:.2f}"
 
-                # Zapis pliku Excel do pamięci
-                excel_bytes = io.BytesIO()
-                with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
-                    intersekcja_excel = intersekcja.drop(columns=['geometry'], errors='ignore')
-                    intersekcja_excel.to_excel(writer, sheet_name='Szczegółowe', index=False)
-                    wyniki.to_excel(writer, sheet_name='Podsumowanie', index=False)
-                excel_bytes.seek(0)
+            out_doc = ezdxf.new('R2010')
+            out_msp = out_doc.modelspace()
+            out_doc.layers.add(name='DZIALKI', color=3)
+            out_doc.layers.add(name='ZNISZCZENIA_WYNIK', color=1)
+            out_doc.layers.add(name='OPISY', color=7)
+            out_doc.layers.add(name='KABEL', color=5)
 
-                st.success("Analiza zakończona sukcesem!")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.download_button("📥 Pobierz wynikowy DXF", data=dxf_bytes, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
-                with col2:
-                    st.download_button("📊 Pobierz zestawienie Excel", data=excel_bytes, file_name="Zestawienie_Zniszczen.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            for entity in msp.query(f'*[layer=="{kabel_layer}"]'):
+                out_msp.add_entity(entity.copy())
 
-            except Exception as e:
-                st.error(f"Wystąpił błąd podczas przetwarzania: {e}")
+            for geom in dzialki_gdf.geometry:
+                if isinstance(geom, Polygon):
+                    out_msp.add_lwpolyline(list(geom.exterior.coords), dxfattribs={'layer': 'DZIALKI'})
+
+            for idx, row in intersekcja.iterrows():
+                if isinstance(row.geometry, Polygon):
+                    out_msp.add_lwpolyline(list(row.geometry.exterior.coords), dxfattribs={'layer': 'ZNISZCZENIA_WYNIK', 'color': 1})
+                    centroid = row.geometry.centroid
+                    tekst = f"Dz: {fmt_dzialka(row['id_dzialki'])}\\nP: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
+                    out_msp.add_mtext(tekst, dxfattribs={'layer': 'OPISY', 'insert': (centroid.x, centroid.y), 'char_height': 0.5})
+
+            bbox = zniszczenia_gdf_oryginalne.total_bounds
+            tabela_x, tabela_y = bbox[2] + 20, bbox[3] 
+
+            out_msp.add_mtext("ZESTAWIENIE SZCZEGOLOWE ZNISZCZEN", dxfattribs={'insert': (tabela_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
+            y_offset = tabela_y - 1.5
+            suma_szczegolowa = 0
+            for i, row in intersekcja.iterrows():
+                suma_szczegolowa += row['pow_zniszczenia_m2']
+                linia_txt = f"Poligon {i+1} | Dz: {fmt_dzialka(row['id_dzialki'])} | Zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
+                out_msp.add_mtext(linia_txt, dxfattribs={'insert': (tabela_x, y_offset), 'char_height': 0.5, 'layer': 'OPISY'})
+                y_offset -= 1.0
+            out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_szczegolowa)} m\\U+00B2", dxfattribs={'insert': (tabela_x, y_offset - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
+
+            tabela2_x = tabela_x + 60
+            out_msp.add_mtext("PODSUMOWANIE DLA DZIALEK", dxfattribs={'insert': (tabela2_x, tabela_y), 'char_height': 0.75, 'layer': 'OPISY'})
+            y_offset2 = tabela_y - 1.5
+            suma_zbiorcza = 0
+            for i, row in wyniki.iterrows():
+                suma_zbiorcza += row['pow_zniszczenia_m2']
+                linia_txt = f"Dz: {fmt_dzialka(row['id_dzialki'])} | Lacznie zniszcz: {fmt_pow(row['pow_zniszczenia_m2'])} m\\U+00B2"
+                out_msp.add_mtext(linia_txt, dxfattribs={'insert': (tabela2_x, y_offset2), 'char_height': 0.5, 'layer': 'OPISY'})
+                y_offset2 -= 1.0
+            out_msp.add_mtext(f"SUMA CALKOWITA: {fmt_pow(suma_zbiorcza)} m\\U+00B2", dxfattribs={'insert': (tabela2_x, y_offset2 - 0.5), 'char_height': 0.5, 'layer': 'OPISY', 'color': 1})
+
+            dxf_bytes = io.BytesIO()
+            out_doc.write(dxf_bytes)
+            dxf_bytes.seek(0)
+
+            excel_bytes = io.BytesIO()
+            with pd.ExcelWriter(excel_bytes, engine='openpyxl') as writer:
+                intersekcja_excel = intersekcja.drop(columns=['geometry'], errors='ignore')
+                intersekcja_excel.to_excel(writer, sheet_name='Szczegółowe', index=False)
+                wyniki.to_excel(writer, sheet_name='Podsumowanie', index=False)
+            excel_bytes.seek(0)
+
+            progress_bar.progress(100)
+            status_text.text("Gotowe!")
+
+            st.success("Analiza zakończona sukcesem!")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button("📥 Pobierz wynikowy DXF", data=dxf_bytes, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
+            with col2:
+                st.download_button("📊 Pobierz zestawienie Excel", data=excel_bytes, file_name="Zestawienie_Zniszczen.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        except Exception as e:
+            st.error(f"Wystąpił błąd podczas przetwarzania: {e}")
