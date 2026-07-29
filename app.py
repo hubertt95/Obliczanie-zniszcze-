@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="wide")
 
 st.title("⚡ Geodezja: Kalkulator Zniszczeń Kabla")
-st.write("Wrzuć plik DXF, wygeneruj raport i przeglądaj geometrie w interaktywnej jakości CAD.")
+st.write("Wrzuć plik DXF, sprawdź natychmiastowy podgląd CAD, a następnie wygeneruj raport i pobierz dane.")
 
 # Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
@@ -29,6 +29,10 @@ if "dzialki_gdf" not in st.session_state:
     st.session_state.dzialki_gdf = None
 if "zniszczenia_gdf_oryginalne" not in st.session_state:
     st.session_state.zniszczenia_gdf_oryginalne = None
+if "kabel_geoms_raw" not in st.session_state:
+    st.session_state.kabel_geoms_raw = []
+if "zniszczenia_geoms_raw" not in st.session_state:
+    st.session_state.zniszczenia_geoms_raw = []
 
 # --- FUNKCJE POMOCNICZE ---
 
@@ -115,6 +119,28 @@ if uploaded_file is not None:
     format_dzialki = st.selectbox("Format numeru działki:", ["Pełny (np. 143411_4.0001.1261)", "Obręb i Numer (np. 0001.1261)", "Tylko Numer (np. 1261)"])
     format_pow = st.selectbox("Zaokrąglenie powierzchni:", ["2 miejsca po przecinku (np. 11.44)", "1 miejsce po przecinku (np. 11.4)", "Brak - liczby całkowite (np. 11)"])
 
+    # --- WSTĘPNE WBUDOWANIE GEOMETRII DO PODGLĄDU OD RAZU PO WYBORZE WARSTW ---
+    kabel_geoms_tmp = []
+    for entity in msp.query(f'*[layer=="{kabel_layer}"]'):
+        if entity.dxftype() == 'LINE':
+            kabel_geoms_tmp.append(LineString([(entity.dxf.start[0], entity.dxf.start[1]), (entity.dxf.end[0], entity.dxf.end[1])]))
+        elif entity.dxftype() == 'LWPOLYLINE':
+            pts = [(p[0], p[1]) for p in entity.get_points(format='xy')]
+            if len(pts) >= 2:
+                kabel_geoms_tmp.append(LineString(pts))
+
+    zniszczenia_geoms_tmp = []
+    for entity in msp.query(f'*[layer=="{zniszczenia_layer}"]'):
+        if entity.dxftype() == 'LWPOLYLINE':
+            pts = [(p[0], p[1]) for p in entity.get_points(format='xy')]
+            if len(pts) >= 3:
+                p = Polygon(pts)
+                if p.is_valid:
+                    zniszczenia_geoms_tmp.append(p)
+
+    st.session_state.kabel_geoms_raw = kabel_geoms_tmp
+    st.session_state.zniszczenia_geoms_raw = zniszczenia_geoms_tmp
+
     if st.button("🚀 Generuj raport i pobierz dane z GUGiK", type="primary"):
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -123,19 +149,11 @@ if uploaded_file is not None:
             status_text.text("Analiza geometrii z pliku DXF...")
             progress_bar.progress(10)
 
-            zniszczenia_geoms = []
+            zniszczenia_geoms = st.session_state.zniszczenia_geoms_raw
             epsg_code = 2177
 
-            obiekty = list(msp.query(f'*[layer=="{zniszczenia_layer}"]'))
-            for entity in obiekty:
-                if entity.dxftype() == 'LWPOLYLINE':
-                    points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
-                    if len(points) >= 3:
-                        poly = Polygon(points)
-                        if poly.is_valid:
-                            zniszczenia_geoms.append(poly)
-                            if len(zniszczenia_geoms) == 1:
-                                epsg_code = identify_epsg(points[0][0])
+            if zniszczenia_geoms:
+                epsg_code = identify_epsg(zniszczenia_geoms[0].exterior.coords[0][0])
 
             if not zniszczenia_geoms:
                 st.error(f"Nie znaleziono zamkniętych polilinii na warstwie '{zniszczenia_layer}'!")
@@ -291,51 +309,61 @@ if uploaded_file is not None:
             st.error(f"Wystąpił błąd podczas przetwarzania: {e}")
 
 # --- INTERAKTYWNY PODGLĄD GRAFICZNY W JAKOŚCI CAD (PLOTLY) ---
-if st.session_state.dzialki_gdf is not None:
-    st.subheader("🗺️ Interaktywny podgląd CAD (Działki, Zniszczenia i Trasa)")
-    st.info("💡 Możesz przybliżać (zoom), oddalać, przesuwać mapę kursorem oraz włączać/wyłączać warstwy w legendzie obok wykresów.")
+if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
+    st.subheader("🗺️ Interaktywny podgląd CAD")
+    st.info("💡 Użyj scrolla myszy do przybliżania (w miejscu kursora) oraz kliknij i przeciągnij, aby przesunąć mapę.")
 
     fig = go.Figure()
 
-    # 1. Działki z GUGiK
-    for _, row in st.session_state.dzialki_gdf.iterrows():
-        geom = row.geometry
-        if geom.geom_type == 'Polygon':
-            x, y = geom.exterior.xy
-            fig.add_trace(go.Scatter(
-                x=list(x), y=list(y),
-                mode='lines',
-                line=dict(color='green', width=1.5),
-                name=f"Działka: {row['id_dzialki']}",
-                hoverinfo='text',
-                text=f"ID Działki: {row['id_dzialki']}<br>Obręb: {row['obreb']}"
-            ))
+    # 1. Trasa kabla (zawsze widoczna po wczytaniu DXF)
+    for line in st.session_state.kabel_geoms_raw:
+        x, y = line.xy
+        fig.add_trace(go.Scatter(
+            x=list(x), y=list(y),
+            mode='lines',
+            line=dict(color='blue', width=2),
+            name="Trasa kabla"
+        ))
 
-    # 2. Obwiednie zniszczeń
-    if st.session_state.zniszczenia_gdf_oryginalne is not None:
-        for idx, row in st.session_state.zniszczenia_gdf_oryginalne.iterrows():
+    # 2. Zniszczenia z DXF (zawsze widoczne po wczytaniu DXF)
+    for idx, poly in enumerate(st.session_state.zniszczenia_geoms_raw):
+        x, y = poly.exterior.xy
+        fig.add_trace(go.Scatter(
+            x=list(x), y=list(y),
+            mode='lines',
+            line=dict(color='red', width=2),
+            fill='toself',
+            fillcolor='rgba(255, 0, 0, 0.2)',
+            name=f"Zniszczenie #{idx+1}"
+        ))
+
+    # 3. Działki z GUGiK (pojawiają się po wygenerowaniu raportu)
+    if st.session_state.dzialki_gdf is not None:
+        for _, row in st.session_state.dzialki_gdf.iterrows():
             geom = row.geometry
             if geom.geom_type == 'Polygon':
                 x, y = geom.exterior.xy
                 fig.add_trace(go.Scatter(
                     x=list(x), y=list(y),
                     mode='lines',
-                    line=dict(color='red', width=2),
-                    fill='toself',
-                    fillcolor='rgba(255, 0, 0, 0.2)',
-                    name=f"Zniszczenie #{idx+1}"
+                    line=dict(color='green', width=1.5),
+                    name=f"Działka: {row['id_dzialki']}",
+                    hoverinfo='text',
+                    text=f"ID Działki: {row['id_dzialki']}<br>Obręb: {row['obreb']}"
                 ))
 
     fig.update_layout(
         title="Wizualizacja wektorowa CAD",
-        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1),
+        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1, zoom=['wheel', 'pan']),
         yaxis=dict(title="Y (metry)"),
         showlegend=True,
         height=700,
-        margin=dict(l=20, r=20, t=40, b=20)
+        margin=dict(l=20, r=20, t=40, b=20),
+        dragmode='pan'  # Domyślne narzędzie to łapanie i przesuwanie mapy
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    # Włączenie pełnego wsparcia dla zoomu kółkiem myszy w miejscu kursora
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'editable': False})
 
 # Wyświetlanie tabeli podglądowej i przycisków pobierania
 if st.session_state.wyniki_df is not None:
