@@ -311,7 +311,7 @@ if uploaded_file is not None:
 # --- INTERAKTYWNY PODGLĄD GRAFICZNY W JAKOŚCI CAD (PLOTLY) ---
 if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
     st.subheader("🗺️ Interaktywny podgląd CAD")
-    st.info("💡 Użyj kółka myszy lub uszczypnięcia dwoma palcami na telefonie, aby przybliżać i oddalać. Kliknij i przeciągnij, aby przesuwać mapę.")
+    st.info("💡 Proporcje osi 1:1 (skala geodezyjna zachowana bez zniekształceń).")
 
     fig = go.Figure()
 
@@ -354,21 +354,21 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
                     text=f"Działka: {row['id_dzialki']}<br>Obręb: {row['obreb']}"
                 ))
 
+    # Przywrócenie zachowania proporcji 1:1, żeby kształty nie były zniekształcone
     fig.update_layout(
         title="Wizualizacja wektorowa CAD",
-        xaxis=dict(title="X (metry)"),
+        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1),
         yaxis=dict(title="Y (metry)"),
         showlegend=False,
         height=700,
-        margin=dict(l=20, r=20, t=40, b=20),
-        dragmode='pan'
+        margin=dict(l=20, r=20, t=40, b=20)
     )
 
     st.plotly_chart(
         fig, 
         use_container_width=True, 
         config={
-            'scrollZoom': True, 
+            'scrollZoom': False, 
             'doubleClick': 'reset',
             'responsive': True
         }
