@@ -258,7 +258,6 @@ if uploaded_file is not None:
                 if isinstance(row.geometry, Polygon):
                     out_msp.add_lwpolyline(list(row.geometry.exterior.coords), dxfattribs={'layer': 'ZNISZCZENIA_WYNIK', 'color': 1})
                     centroid = row.geometry.centroid
-                    # Poprawione formatowanie powierzchni: czyste m2 zamiast kodów systemowych
                     tekst = f"Dz: {fmt_dzialka(row['id_dzialki'])}\nP: {fmt_pow(row['pow_zniszczenia_m2'])} m2"
                     out_msp.add_mtext(tekst, dxfattribs={'layer': 'OPISY', 'insert': (centroid.x, centroid.y), 'char_height': 0.5})
 
@@ -312,7 +311,7 @@ if uploaded_file is not None:
 # --- INTERAKTYWNY PODGLĄD GRAFICZNY W JAKOŚCI CAD (PLOTLY) ---
 if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
     st.subheader("🗺️ Interaktywny podgląd CAD")
-    st.info("💡 Na komputerze: użyj scrolla myszy do przybliżania i przeciągnij, aby przesunąć. Na telefonie: użyj uszczypnięcia (pinch-to-zoom) dwoma palcami i przesuń dotykiem.")
+    st.info("💡 Na komputerze: użyj scrolla myszy do przybliżania i przeciągnij, aby przesunąć. Na telefonie: użyj uszczypnięcia (pinch-to-zoom) dwoma palcami oraz przesuń dotykiem.")
 
     fig = go.Figure()
 
@@ -363,13 +362,12 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
         dragmode='pan'  # Domyślne narzędzie to przesuwanie mapy (pan)
     )
 
-    # Konfiguracja wspierająca zoom kółkiem myszy oraz gesty dotykowe (pinch-to-zoom na telefonie)
+    # Włączenie scrollZoom oraz obsługa gestów dotykowych (pinch-to-zoom)
     st.plotly_chart(
         fig, 
         use_container_width=True, 
         config={
             'scrollZoom': True, 
-            'edits': {'shapePosition': True},
             'doubleClick': 'reset',
             'responsive': True
         }
