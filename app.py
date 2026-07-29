@@ -72,7 +72,7 @@ uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", ty
 
 if uploaded_file is not None:
     try:
-        # Konwersja przesłanego pliku na bajty i odczyt przez ezdxf.read
+        # Bezpieczna konwersja przesłanego pliku na bajty dla ezdxf.read[cite: 11]
         bytes_data = uploaded_file.getvalue()
         if isinstance(bytes_data, str):
             bytes_data = bytes_data.encode("utf-8", errors="ignore")
