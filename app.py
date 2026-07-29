@@ -311,7 +311,7 @@ if uploaded_file is not None:
 # --- INTERAKTYWNY PODGLĄD GRAFICZNY W JAKOŚCI CAD (PLOTLY) ---
 if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
     st.subheader("🗺️ Interaktywny podgląd CAD")
-    st.info("💡 Na komputerze: użyj scrolla myszy do przybliżania i przeciągnij, aby przesunąć. Na telefonie: użyj uszczypnięcia (pinch-to-zoom) dwoma palcami oraz przesuń dotykiem.")
+    st.info("💡 Użyj kółka myszy lub uszczypnięcia dwoma palcami na telefonie, aby przybliżać i oddalać. Kliknij i przeciągnij, aby przesuwać mapę.")
 
     fig = go.Figure()
 
@@ -322,7 +322,8 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
             x=list(x), y=list(y),
             mode='lines',
             line=dict(color='blue', width=2),
-            name="Trasa kabla"
+            showlegend=False,
+            hoverinfo='skip'
         ))
 
     # 2. Zniszczenia z DXF (zawsze widoczne po wczytaniu DXF)
@@ -334,7 +335,8 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
             line=dict(color='red', width=2),
             fill='toself',
             fillcolor='rgba(255, 0, 0, 0.2)',
-            name=f"Zniszczenie #{idx+1}"
+            showlegend=False,
+            hoverinfo='skip'
         ))
 
     # 3. Działki z GUGiK (pojawiają się po wygenerowaniu raportu)
@@ -347,22 +349,22 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
                     x=list(x), y=list(y),
                     mode='lines',
                     line=dict(color='green', width=1.5),
-                    name=f"Działka: {row['id_dzialki']}",
+                    showlegend=False,
                     hoverinfo='text',
-                    text=f"ID Działki: {row['id_dzialki']}<br>Obręb: {row['obreb']}"
+                    text=f"Działka: {row['id_dzialki']}<br>Obręb: {row['obreb']}"
                 ))
 
     fig.update_layout(
         title="Wizualizacja wektorowa CAD",
-        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1),
-        yaxis=dict(title="Y (metry)"),
-        showlegend=True,
+        xaxis=dict(title="X (metry)", showlegend=False),
+        yaxis=dict(title="Y (metry)", showlegend=False),
+        showlegend=False,  # Całkowite ukrycie legendy
         height=700,
         margin=dict(l=20, r=20, t=40, b=20),
         dragmode='pan'  # Domyślne narzędzie to przesuwanie mapy (pan)
     )
 
-    # Włączenie scrollZoom oraz obsługa gestów dotykowych (pinch-to-zoom)
+    # Włączenie scrollZoom dla myszy oraz gestów dotykowych (pinch-to-zoom)
     st.plotly_chart(
         fig, 
         use_container_width=True, 
