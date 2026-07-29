@@ -6,8 +6,6 @@ import pandas as pd
 import requests
 import shapely.wkt
 import io
-import os
-import tempfile
 import concurrent.futures
 
 st.set_page_config(page_title="Geodezja - Kalkulator Zniszczeń", layout="centered")
@@ -77,14 +75,11 @@ uploaded_file = st.file_uploader("Wybierz plik DXF z trasą i zniszczeniami", ty
 
 if uploaded_file is not None:
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            tmp_path = tmp_file.name
-
-        doc = ezdxf.readfile(tmp_path)
+        # Odczyt pliku w pamięci strumienia jako tekst (naprawa błędu z bytes-like object)
+        string_data = uploaded_file.getvalue().decode("utf-8", errors="ignore")
+        doc = ezdxf.read(io.StringIO(string_data))
         msp = doc.modelspace()
         layers = sorted(list(set([layer.dxf.name for layer in doc.layers])))
-        os.remove(tmp_path)
     except Exception as e:
         st.error(f"Nie można odczytać pliku DXF: {e}")
         st.stop()
@@ -95,8 +90,9 @@ if uploaded_file is not None:
     
     kabel_layer = st.selectbox("Wybierz warstwę TRASY KABLA:", layers)
     
-    default_zniszczenia = "!!!zniszczenia" if "!!!zniszczenia" in layers else layers[0]
-    zniszczenia_layers_input = st.text_input("Warstwy ZNISZCZEŃ (oddziel przecinkami, jeśli kilka):", value=default_zniszczenia)
+    # Wybór jednej warstwy zniszczeń z rozwijanej listy
+    default_zniszch_idx = layers.index("!!!zniszczenia") if "!!!zniszczenia" in layers else 0
+    zniszczenia_layer = st.selectbox("Wybierz warstwę ZNISZCZEŃ:", layers, index=default_zniszch_idx)
     
     format_dzialki = st.selectbox("Format numeru działki:", ["Pełny (np. 143411_4.0001.1261)", "Obręb i Numer (np. 0001.1261)", "Tylko Numer (np. 1261)"])
     format_pow = st.selectbox("Zaokrąglenie powierzchni:", ["2 miejsca po przecinku (np. 11.44)", "1 miejsce po przecinku (np. 11.4)", "Brak - liczby całkowite (np. 11)"])
@@ -104,30 +100,28 @@ if uploaded_file is not None:
     if st.button("🚀 Generuj raport i pliki wynikowe", type="primary"):
         with st.spinner("Przetwarzanie geometrii i szybkie pobieranie danych z GUGiK..."):
             try:
-                layers_zniszczenia = [l.strip() for l in zniszczenia_layers_input.split(',') if l.strip()]
                 zniszczenia_geoms = []
                 epsg_code = 2177
 
-                for lay in layers_zniszczenia:
-                    obiekty = list(msp.query(f'*[layer=="{lay}"]'))
-                    for entity in obiekty:
-                        if entity.dxftype() == 'LWPOLYLINE':
-                            points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
-                            if len(points) >= 3:
-                                poly = Polygon(points)
-                                if poly.is_valid:
-                                    zniszczenia_geoms.append(poly)
-                                    if len(zniszczenia_geoms) == 1:
-                                        epsg_code = identify_epsg(points[0][0])
+                obiekty = list(msp.query(f'*[layer=="{zniszczenia_layer}"]'))
+                for entity in obiekty:
+                    if entity.dxftype() == 'LWPOLYLINE':
+                        points = [(p[0], p[1]) for p in entity.get_points(format='xy')]
+                        if len(points) >= 3:
+                            poly = Polygon(points)
+                            if poly.is_valid:
+                                zniszczenia_geoms.append(poly)
+                                if len(zniszczenia_geoms) == 1:
+                                    epsg_code = identify_epsg(points[0][0])
 
                 if not zniszczenia_geoms:
-                    st.error("Nie znaleziono zamkniętych polilinii na podanych warstwach zniszczeń!")
+                    st.error(f"Nie znaleziono zamkniętych polilinii na warstwie '{zniszczenia_layer}'!")
                     st.stop()
 
                 zniszczenia_gdf_oryginalne = gpd.GeoDataFrame(geometry=zniszczenia_geoms, crs=f"EPSG:{epsg_code}")
                 zniszczenia_gdf_1992 = zniszczenia_gdf_oryginalne.to_crs(epsg=2180)
 
-                # Wielowątkowe pobieranie punktów dla wszystkich obwiedni
+                # Wielowątkowe pobieranie punktów dla obwiedni
                 all_points_with_meta = []
                 for idx, poly in enumerate(zniszczenia_gdf_1992.geometry.tolist()):
                     pts = get_sampled_points(poly, distance=5.0)
