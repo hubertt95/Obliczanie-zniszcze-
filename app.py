@@ -9,12 +9,13 @@ import io
 import os
 import tempfile
 import concurrent.futures
+import time
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Obliczanie powierzchni zniszczeń", layout="wide")
 
 st.title("⚡ Obliczanie powierzchni zniszczeń")
-st.write("Moduł analizy przestrzennej i raportowania uszkodzeń na trasie linii kablowej.")
+st.write("Moduł analizy przestrzennej i raportowania uszkodzeń infrastruktury liniowej.")
 
 # Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
@@ -44,50 +45,86 @@ def identify_epsg(x):
     elif strefa == '8': return 2179
     else: return 2177 
 
-def get_sampled_points(poly, distance=5.0):
+def get_sampled_points(poly):
+    """
+    Tworzy punkty kontrolne na granicy poligonu oraz siatkę punktów w jego wnętrzu.
+    Gwarantuje wykrycie wszystkich działek, nawet tych całkowicie zamkniętych wewnątrz zniszczeń.
+    """
     points = [poly.representative_point()]
+    
+    # 1. Próbkowanie granicy poligonu (co 10 m)
     boundary = poly.exterior
     length = boundary.length
-    if length / distance > 50:
-        distance = length / 50.0
+    distance = 10.0
+    if length / distance > 500:
+        distance = length / 500.0
+        
     d = 0.0
     while d < length:
         points.append(boundary.interpolate(d))
         d += distance
+
+    # 2. Próbkowanie wnętrza poligonu - siatka
+    minx, miny, maxx, maxy = poly.bounds
+    width = maxx - minx
+    height = maxy - miny
+    
+    step = 10.0
+    # Zabezpieczenie przed przeładowaniem dla ogromnych poligonów (>2500 pkt na poligon)
+    if (width / step) * (height / step) > 2500:
+        step = max(width, height) / 50.0
+
+    x = minx + step / 2.0
+    while x < maxx:
+        y = miny + step / 2.0
+        while y < maxy:
+            pt = Point(x, y)
+            if poly.contains(pt):
+                points.append(pt)
+            y += step
+        x += step
+        
     return points
 
 # --- FUNKCJE API GUGiK ---
 
-def zapytaj_uldk_xy(x, y):
+def zapytaj_uldk_xy(x, y, retries=3):
     url = f"https://uldk.gugik.gov.pl/?request=GetParcelByXY&xy={x},{y}&result=id"
-    try:
-        odp = requests.get(url, timeout=15)
-        if odp.status_code == 200 and odp.text.startswith('0'): 
-            return odp.text.split('\n')[1].strip()
-    except:
-        pass
+    for _ in range(retries):
+        try:
+            odp = requests.get(url, timeout=10)
+            if odp.status_code == 200:
+                if odp.text.startswith('0'): 
+                    return odp.text.split('\n')[1].strip()
+                else:
+                    return None
+        except:
+            time.sleep(0.5)
     return None
 
-def pobierz_dane_dzialki_po_id(id_dzialki, srid):
+def pobierz_dane_dzialki_po_id(id_dzialki, srid, retries=3):
     url = f"https://uldk.gugik.gov.pl/?request=GetParcelById&id={id_dzialki}&result=geom_wkt,wojewodztwo,powiat,gmina,obreb&srid={srid}"
-    try:
-        r = requests.get(url, timeout=15)
-        if r.status_code == 200 and r.text.startswith("0"):
-            linie = r.text.strip().split('\n')
-            if len(linie) > 1:
-                parts = linie[1].split('|')
-                if len(parts) >= 5:
-                    wkt_czysty = parts[0].split(';', 1)[1] if ';' in parts[0] else parts[0]
-                    return {
-                        'geometry': shapely.wkt.loads(wkt_czysty),
-                        'id_dzialki': id_dzialki,
-                        'wojewodztwo': parts[1],
-                        'powiat': parts[2],
-                        'gmina': parts[3],
-                        'obreb': parts[4]
-                    }
-    except:
-        pass
+    for _ in range(retries):
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200 and r.text.startswith("0"):
+                linie = r.text.strip().split('\n')
+                if len(linie) > 1:
+                    parts = linie[1].split('|')
+                    if len(parts) >= 5:
+                        wkt_czysty = parts[0].split(';', 1)[1] if ';' in parts[0] else parts[0]
+                        return {
+                            'geometry': shapely.wkt.loads(wkt_czysty),
+                            'id_dzialki': id_dzialki,
+                            'wojewodztwo': parts[1],
+                            'powiat': parts[2],
+                            'gmina': parts[3],
+                            'obreb': parts[4]
+                        }
+            else:
+                return None
+        except:
+            time.sleep(0.5)
     return None
 
 # --- GŁÓWNA APLIKACJA STREAMLIT ---
@@ -161,12 +198,12 @@ if uploaded_file is not None:
             st.session_state.zniszczenia_gdf_oryginalne = gpd.GeoDataFrame(geometry=zniszczenia_geoms, crs=f"EPSG:{epsg_code}")
             zniszczenia_gdf_1992 = st.session_state.zniszczenia_gdf_oryginalne.to_crs(epsg=2180)
 
-            status_text.text("Generowanie punktów kontrolnych dla obwiedni...")
+            status_text.text("Generowanie gęstej siatki punktów wewnątrz obwiedni...")
             progress_bar.progress(25)
 
             all_points_with_meta = []
             for idx, poly in enumerate(zniszczenia_gdf_1992.geometry.tolist()):
-                pts = get_sampled_points(poly, distance=5.0)
+                pts = get_sampled_points(poly)
                 for pt in pts:
                     all_points_with_meta.append((idx + 1, pt))
 
@@ -176,7 +213,7 @@ if uploaded_file is not None:
                 r_id = zapytaj_uldk_xy(pt.x, pt.y)
                 return p_idx, r_id
 
-            status_text.text(f"Odpytywanie usługi ULDK GUGiK ({len(all_points_with_meta)} punktów)...")
+            status_text.text(f"Odpytywanie usługi ULDK GUGiK ({len(all_points_with_meta)} punktów kontrolnych)...")
             progress_bar.progress(40)
 
             completed = 0
@@ -309,7 +346,7 @@ if uploaded_file is not None:
 
 # --- PODGLĄD GRAFICZNY CAD ---
 if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
-    st.subheader("Podgląd graficzny geometrii")
+    st.subheader("Podgląd graficzny geometrii CAD")
 
     fig = go.Figure()
 
@@ -351,11 +388,11 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
 
     fig.update_layout(
         title="",
-        xaxis=dict(title="X (metry)", scaleanchor="y", scaleratio=1, zeroline=False),
-        yaxis=dict(title="Y (metry)", zeroline=False),
+        xaxis=dict(scaleanchor="y", scaleratio=1, zeroline=False, fixedrange=False),
+        yaxis=dict(zeroline=False, fixedrange=False),
         showlegend=False,
         height=700,
-        margin=dict(l=20, r=20, t=20, b=20),
+        margin=dict(l=0, r=0, t=0, b=0),
         dragmode='pan'
     )
 
@@ -364,6 +401,7 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
         use_container_width=True, 
         config={
             'scrollZoom': True, 
+            'displayModeBar': False,
             'doubleClick': 'reset',
             'responsive': True
         }
