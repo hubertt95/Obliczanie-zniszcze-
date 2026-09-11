@@ -1,6 +1,7 @@
 import streamlit as st
 import ezdxf
 from shapely.geometry import Polygon, LineString, Point
+from shapely.prepared import prep
 import geopandas as gpd
 import pandas as pd
 import requests
@@ -14,10 +15,9 @@ import plotly.graph_objects as go
 
 st.set_page_config(page_title="Obliczanie powierzchni zniszczeń", layout="wide")
 
-st.title("⚡ Obliczanie powierzchni zniszczeń")
-st.write("Moduł analizy przestrzennej i raportowania uszkodzeń infrastruktury liniowej.")
+st.title("Obliczanie powierzchni zniszczeń")
+st.write("Moduł analizy przestrzennej i raportowania uszkodzeń infrastruktury liniowej w korelacji z ewidencją gruntów.")
 
-# Inicjalizacja pamięci sesji
 if "dxf_data" not in st.session_state:
     st.session_state.dxf_data = None
 if "excel_data" not in st.session_state:
@@ -35,8 +35,6 @@ if "kabel_geoms_raw" not in st.session_state:
 if "zniszczenia_geoms_raw" not in st.session_state:
     st.session_state.zniszczenia_geoms_raw = []
 
-# --- FUNKCJE POMOCNICZE ---
-
 def identify_epsg(x):
     strefa = str(x)[0] 
     if strefa == '5': return 2176
@@ -46,50 +44,41 @@ def identify_epsg(x):
     else: return 2177 
 
 def get_sampled_points(poly):
-    """
-    Tworzy punkty kontrolne na granicy poligonu oraz siatkę punktów w jego wnętrzu.
-    Gwarantuje wykrycie wszystkich działek, nawet tych całkowicie zamkniętych wewnątrz zniszczeń.
-    """
     points = [poly.representative_point()]
-    
-    # 1. Próbkowanie granicy poligonu (co 10 m)
     boundary = poly.exterior
     length = boundary.length
-    distance = 10.0
-    if length / distance > 500:
-        distance = length / 500.0
+    
+    dist_b = 5.0
+    if length / dist_b > 1000:
+        dist_b = length / 1000.0
         
     d = 0.0
     while d < length:
         points.append(boundary.interpolate(d))
-        d += distance
+        d += dist_b
 
-    # 2. Próbkowanie wnętrza poligonu - siatka
-    minx, miny, maxx, maxy = poly.bounds
-    width = maxx - minx
-    height = maxy - miny
-    
+    area = poly.area
     step = 10.0
-    # Zabezpieczenie przed przeładowaniem dla ogromnych poligonów (>2500 pkt na poligon)
-    if (width / step) * (height / step) > 2500:
-        step = max(width, height) / 50.0
+    if area / (step**2) > 2000:
+        step = (area / 2000.0) ** 0.5
 
+    minx, miny, maxx, maxy = poly.bounds
+    poly_prep = prep(poly)
+    
     x = minx + step / 2.0
     while x < maxx:
         y = miny + step / 2.0
         while y < maxy:
             pt = Point(x, y)
-            if poly.contains(pt):
+            if poly_prep.contains(pt):
                 points.append(pt)
             y += step
         x += step
         
     return points
 
-# --- FUNKCJE API GUGiK ---
-
 def zapytaj_uldk_xy(x, y, retries=3):
-    url = f"https://uldk.gugik.gov.pl/?request=GetParcelByXY&xy={x},{y}&result=id"
+    url = f"https://uldk.gugik.gov.pl/?request=GetParcelByXY&xy={x:.2f},{y:.2f}&result=id"
     for _ in range(retries):
         try:
             odp = requests.get(url, timeout=10)
@@ -127,9 +116,7 @@ def pobierz_dane_dzialki_po_id(id_dzialki, srid, retries=3):
             time.sleep(0.5)
     return None
 
-# --- GŁÓWNA APLIKACJA STREAMLIT ---
-
-uploaded_file = st.file_uploader("Wczytaj plik wektorowy DXF zawierający geometrię trasy oraz polilinie zniszczeń", type=["dxf"])
+uploaded_file = st.file_uploader("Wybierz plik wektorowy DXF (trasa i poligony zniszczeń)", type=["dxf"])
 
 if uploaded_file is not None:
     try:
@@ -145,11 +132,11 @@ if uploaded_file is not None:
         st.error(f"Błąd odczytu pliku DXF: {e}")
         st.stop()
 
-    st.success("Plik DXF został pomyślnie zaimportowany.")
+    st.success("Plik DXF został poprawnie wczytany.")
 
-    st.subheader("Konfiguracja parametrów analizy")
+    st.subheader("Parametry analizy przestrzennej")
     
-    kabel_layer = st.selectbox("Warstwa trasy kablowej:", layers)
+    kabel_layer = st.selectbox("Warstwa trasy wektorowej (kabel):", layers)
     default_zniszch_idx = layers.index("!!!zniszczenia") if "!!!zniszczenia" in layers else 0
     zniszczenia_layer = st.selectbox("Warstwa poligonów zniszczeń:", layers, index=default_zniszch_idx)
     
@@ -177,12 +164,12 @@ if uploaded_file is not None:
     st.session_state.kabel_geoms_raw = kabel_geoms_tmp
     st.session_state.zniszczenia_geoms_raw = zniszczenia_geoms_tmp
 
-    if st.button("Uruchom obliczenia i generuj raport", type="primary"):
+    if st.button("Rozpocznij analizę i pobierz dane z bazy GUGiK", type="primary"):
         progress_bar = st.progress(0)
         status_text = st.empty()
 
         try:
-            status_text.text("Przetwarzanie geometrii wektorowej...")
+            status_text.text("Przetwarzanie geometrii poligonowej...")
             progress_bar.progress(10)
 
             zniszczenia_geoms = st.session_state.zniszczenia_geoms_raw
@@ -192,13 +179,13 @@ if uploaded_file is not None:
                 epsg_code = identify_epsg(zniszczenia_geoms[0].exterior.coords[0][0])
 
             if not zniszczenia_geoms:
-                st.error(f"Brak zamkniętych polilinii na wybranej warstwie zniszczeń: '{zniszczenia_layer}'.")
+                st.error(f"Brak zamkniętych polilinii na wskazanej warstwie zniszczeń: '{zniszczenia_layer}'.")
                 st.stop()
 
             st.session_state.zniszczenia_gdf_oryginalne = gpd.GeoDataFrame(geometry=zniszczenia_geoms, crs=f"EPSG:{epsg_code}")
             zniszczenia_gdf_1992 = st.session_state.zniszczenia_gdf_oryginalne.to_crs(epsg=2180)
 
-            status_text.text("Generowanie gęstej siatki punktów wewnątrz obwiedni...")
+            status_text.text("Generowanie siatki punktów kontrolnych...")
             progress_bar.progress(25)
 
             all_points_with_meta = []
@@ -213,13 +200,13 @@ if uploaded_file is not None:
                 r_id = zapytaj_uldk_xy(pt.x, pt.y)
                 return p_idx, r_id
 
-            status_text.text(f"Odpytywanie usługi ULDK GUGiK ({len(all_points_with_meta)} punktów kontrolnych)...")
+            status_text.text(f"Odpytywanie usługi sieciowej ULDK GUGiK ({len(all_points_with_meta)} pkt)...")
             progress_bar.progress(40)
 
             completed = 0
             total_points = len(all_points_with_meta)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
                 futures = [executor.submit(check_point, p_idx, pt) for p_idx, pt in all_points_with_meta]
                 for future in concurrent.futures.as_completed(futures):
                     completed += 1
@@ -234,10 +221,10 @@ if uploaded_file is not None:
                 wszystkie_unikalne_id.update(ids)
 
             if not wszystkie_unikalne_id:
-                st.error("Usługa ULDK nie zwróciła identyfikatorów działek dla wskazanego zakresu.")
+                st.error("Usługa ULDK nie zwróciła identyfikatorów działek dla wektorów badawczych.")
                 st.stop()
 
-            status_text.text(f"Pobieranie danych katastralnych dla {len(wszystkie_unikalne_id)} unikalnych działek...")
+            status_text.text(f"Pobieranie wektorów działek ewidencyjnych ({len(wszystkie_unikalne_id)} szt.)...")
             progress_bar.progress(75)
 
             dane_dzialek = []
@@ -246,7 +233,7 @@ if uploaded_file is not None:
                 if dane:
                     dane_dzialek.append(dane)
 
-            status_text.text("Przeprowadzanie analizy topologicznej (GIS)...")
+            status_text.text("Analiza topologiczna (wyznaczanie iloczynu figur)...")
             progress_bar.progress(85)
 
             dzialki_df = pd.DataFrame(dane_dzialek).drop_duplicates(subset=['id_dzialki'])
@@ -258,7 +245,7 @@ if uploaded_file is not None:
 
             st.session_state.wyniki_df = st.session_state.intersekcja.groupby(['id_dzialki', 'wojewodztwo', 'powiat', 'obreb', 'pow_dzialki_m2'])['pow_zniszczenia_m2'].sum().reset_index()
 
-            status_text.text("Generowanie pliku wynikowego DXF oraz raportu Excel...")
+            status_text.text("Eksport danych do formatu DXF i XLSX...")
             progress_bar.progress(95)
 
             def fmt_dzialka(dz_id):
@@ -338,15 +325,13 @@ if uploaded_file is not None:
             st.session_state.excel_data = excel_bytes.getvalue()
 
             progress_bar.progress(100)
-            status_text.text("Proces zakończony pomyślnie.")
-            st.success("Obliczenia wykonane prawidłowo.")
+            status_text.text("Operacja zakończona.")
 
         except Exception as e:
             st.error(f"Wystąpił błąd krytyczny podczas przetwarzania danych: {e}")
 
-# --- PODGLĄD GRAFICZNY CAD ---
 if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
-    st.subheader("Podgląd graficzny geometrii CAD")
+    st.subheader("Podgląd geometrii wektorowej")
 
     fig = go.Figure()
 
@@ -388,11 +373,11 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
 
     fig.update_layout(
         title="",
-        xaxis=dict(scaleanchor="y", scaleratio=1, zeroline=False, fixedrange=False),
-        yaxis=dict(zeroline=False, fixedrange=False),
+        xaxis=dict(title="X", scaleanchor="y", scaleratio=1, zeroline=False),
+        yaxis=dict(title="Y", zeroline=False),
         showlegend=False,
         height=700,
-        margin=dict(l=0, r=0, t=0, b=0),
+        margin=dict(l=20, r=20, t=20, b=20),
         dragmode='pan'
     )
 
@@ -401,17 +386,19 @@ if st.session_state.kabel_geoms_raw or st.session_state.zniszczenia_geoms_raw:
         use_container_width=True, 
         config={
             'scrollZoom': True, 
-            'displayModeBar': False,
+            'displayModeBar': True,
+            'modeBarButtonsToRemove': ['lasso2d', 'select2d'],
+            'displaylogo': False,
             'doubleClick': 'reset',
             'responsive': True
         }
     )
 
 if st.session_state.wyniki_df is not None:
-    st.subheader("Zestawienie wynikowe")
+    st.subheader("Wyniki analizy katastralnej")
     st.dataframe(st.session_state.wyniki_df, use_container_width=True)
 
-    st.subheader("Pobieranie dokumentacji")
+    st.subheader("Eksport dokumentacji")
     col1, col2 = st.columns(2)
     with col1:
         st.download_button("Pobierz plik DXF", data=st.session_state.dxf_data, file_name="Wynik_Geodezja.dxf", mime="application/dxf")
